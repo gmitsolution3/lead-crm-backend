@@ -6,6 +6,7 @@ import {
   TSaveLeadPayload,
   TSaveLeadResult,
   TSearchGroupResponse,
+  TSearchGroupDocument,
   TGetLeadsQuery,
   TPaginatedLeadsResponse,
   TGetSearchGroupsQuery,
@@ -458,17 +459,24 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
     return { status: "ignored", count: total };
   }
 
+  let group: TSearchGroupDocument | null = null;
+  if (payload.groupId) {
+    group = await SearchGroupModel.findOne({ groupId: payload.groupId });
+  }
+
   const activeQuery =
-    (payload.searchQuery || "").trim().toLowerCase() || "direct extraction";
+    (payload.searchQuery || group?.query || "").trim().toLowerCase() || "direct extraction";
   const now = Date.now();
 
   // Find or create group (case-insensitive regex to match existing groups)
-  let group = await SearchGroupModel.findOne({
-    query: { $regex: new RegExp(`^${escapeRegex(activeQuery)}$`, "i") },
-  });
+  if (!group) {
+    group = await SearchGroupModel.findOne({
+      query: { $regex: new RegExp(`^${escapeRegex(activeQuery)}$`, "i") },
+    });
+  }
 
   if (!group) {
-    const newGroupId = `group-${now}-${Math.random().toString(36).slice(2, 9)}`;
+    const newGroupId = payload.groupId || `group-${now}-${Math.random().toString(36).slice(2, 9)}`;
     group = await SearchGroupModel.create({
       groupId: newGroupId,
       query: activeQuery,
@@ -476,7 +484,7 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       updatedAt: now,
     });
   } else {
-    if (group.query !== activeQuery) {
+    if (group.query !== activeQuery && !payload.groupId) {
       group.query = activeQuery;
     }
     group.updatedAt = now;
@@ -556,6 +564,7 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
         status: "merged",
         count: existingLeads.length,
         by: dupInfo.by,
+        lead: existing,
       };
     }
 
@@ -563,6 +572,7 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       status: "duplicate",
       count: existingLeads.length,
       by: dupInfo.by,
+      lead: existing,
     };
   }
 
@@ -572,7 +582,7 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       ? crypto.randomUUID()
       : `lead-${now}-${Math.random().toString(36).slice(2, 9)}`);
 
-  await LeadModel.create({
+  const createdLead = await LeadModel.create({
     leadId,
     groupId: group.groupId,
     searchQuery: activeQuery,
@@ -594,6 +604,7 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
   return {
     status: "ok",
     count: existingLeads.length + 1,
+    lead: createdLead,
   };
 };
 

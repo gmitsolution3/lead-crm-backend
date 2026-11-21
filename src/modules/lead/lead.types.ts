@@ -87,6 +87,7 @@ export type TKnownLeads = {
 
 export type TSaveLeadPayload = {
   id?: string;
+  groupId?: string;
   source?: string;
   name: string;
   phone?: string;
@@ -105,6 +106,7 @@ export type TSaveLeadResult = {
   status: "ok" | "merged" | "duplicate" | "ignored";
   count: number;
   by?: string;
+  lead?: any;
 };
 
 export type TGetLeadsQuery = {
