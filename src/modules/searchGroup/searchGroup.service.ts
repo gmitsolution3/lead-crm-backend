@@ -74,21 +74,68 @@ const projectStage = {
 const getSearchGroups = async (
   query: TGetSearchGroupsQuery = {},
 ): Promise<TPaginatedSearchGroupsResponse> => {
-  const matchCondition: any = {};
+  const initialMatch: any = {};
   const search = (query.search || "").trim();
   if (search) {
     const sRegex = new RegExp(escapeRegex(search), "i");
-    matchCondition.$or = [{ query: sRegex }, { groupId: sRegex }];
+    initialMatch.$or = [{ query: sRegex }, { groupId: sRegex }];
   }
 
-  const sortQuery: any =
-    query.sortBy === "oldest"
-      ? { updatedAt: 1 }
-      : query.sortBy === "query_asc"
-      ? { query: 1 }
-      : query.sortBy === "query_desc"
-      ? { query: -1 }
-      : { updatedAt: -1 };
+  const now = Date.now();
+  if (query.dateRange === "today") {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    initialMatch.updatedAt = { $gte: startOfToday.getTime() };
+  } else if (query.dateRange === "7d") {
+    initialMatch.updatedAt = { $gte: now - 7 * 24 * 60 * 60 * 1000 };
+  } else if (query.dateRange === "30d") {
+    initialMatch.updatedAt = { $gte: now - 30 * 24 * 60 * 60 * 1000 };
+  }
+
+  const postMatch: any = {};
+  if (query.potentialFilter === "has_potential") {
+    postMatch.potentialCount = { $gt: 0 };
+  } else if (query.potentialFilter === "no_potential") {
+    postMatch.potentialCount = { $eq: 0 };
+  } else if (query.potentialFilter === "high_potential") {
+    postMatch.potentialCount = { $gte: 5 };
+  }
+
+  if (query.sizeFilter === "has_leads") {
+    postMatch.leadCount = { $gt: 0 };
+  } else if (query.sizeFilter === "empty") {
+    postMatch.leadCount = { $eq: 0 };
+  } else if (query.sizeFilter === "10_plus") {
+    postMatch.leadCount = { $gte: 10 };
+  } else if (query.sizeFilter === "50_plus") {
+    postMatch.leadCount = { $gte: 50 };
+  }
+
+  let sortQuery: any;
+  switch (query.sortBy) {
+    case "most_leads":
+      sortQuery = { leadCount: -1, updatedAt: -1 };
+      break;
+    case "least_leads":
+      sortQuery = { leadCount: 1, updatedAt: -1 };
+      break;
+    case "most_potential":
+      sortQuery = { potentialCount: -1, updatedAt: -1 };
+      break;
+    case "oldest":
+      sortQuery = { updatedAt: 1 };
+      break;
+    case "query_asc":
+      sortQuery = { query: 1 };
+      break;
+    case "query_desc":
+      sortQuery = { query: -1 };
+      break;
+    case "newest":
+    default:
+      sortQuery = { updatedAt: -1 };
+      break;
+  }
 
   const page = Math.max(1, Number(query.page) || 1);
   const isPaginated = query.page !== undefined || query.limit !== undefined;
@@ -99,18 +146,24 @@ const getSearchGroups = async (
 
   const lookupStage = getLookupStage();
 
+  const basePipeline: any[] = [
+    { $match: initialMatch },
+    lookupStage,
+    projectStage,
+  ];
+
+  if (Object.keys(postMatch).length > 0) {
+    basePipeline.push({ $match: postMatch });
+  }
+
+  basePipeline.push({ $sort: sortQuery });
+
   if (isPaginated && limit > 0) {
     const facetPipeline: any[] = [
-      { $match: matchCondition },
-      { $sort: sortQuery },
+      ...basePipeline,
       {
         $facet: {
-          data: [
-            { $skip: skip },
-            { $limit: limit },
-            lookupStage,
-            projectStage,
-          ],
+          data: [{ $skip: skip }, { $limit: limit }],
           totalCount: [{ $count: "count" }],
         },
       },
@@ -132,15 +185,8 @@ const getSearchGroups = async (
     };
   }
 
-  // Non-paginated query (fetches all groups with computed counts and leads)
-  const nonPaginatedPipeline: any[] = [
-    { $match: matchCondition },
-    { $sort: sortQuery },
-    lookupStage,
-    projectStage,
-  ];
-
-  const data = await SearchGroupModel.aggregate(nonPaginatedPipeline);
+  // Non-paginated query (fetches all groups matching filters)
+  const data = await SearchGroupModel.aggregate(basePipeline);
   return {
     meta: {
       page: 1,

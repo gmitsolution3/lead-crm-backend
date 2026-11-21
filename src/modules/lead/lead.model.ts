@@ -21,6 +21,7 @@ const leadSchema = new Schema<TLeadDocument>(
       type: String,
       required: true,
       trim: true,
+      lowercase: true,
       index: true,
     },
     source: {

@@ -458,10 +458,11 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
     return { status: "ignored", count: total };
   }
 
-  const activeQuery = (payload.searchQuery || "").trim() || "Direct Extraction";
+  const activeQuery =
+    (payload.searchQuery || "").trim().toLowerCase() || "direct extraction";
   const now = Date.now();
 
-  // Find or create group
+  // Find or create group (case-insensitive regex to match existing groups)
   let group = await SearchGroupModel.findOne({
     query: { $regex: new RegExp(`^${escapeRegex(activeQuery)}$`, "i") },
   });
@@ -475,6 +476,9 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       updatedAt: now,
     });
   } else {
+    if (group.query !== activeQuery) {
+      group.query = activeQuery;
+    }
     group.updatedAt = now;
     await group.save();
   }
@@ -616,12 +620,13 @@ const updateLeadRemark = async (
 };
 
 const getKnownLeadsForQuery = async (query?: string): Promise<TKnownLeads> => {
-  if (!query || !query.trim()) {
+  const cleanQ = (query || "").trim().toLowerCase();
+  if (!cleanQ) {
     return { phoneDigits: [], normalizedNames: [], websites: [] };
   }
 
   const group = await SearchGroupModel.findOne({
-    query: { $regex: new RegExp(`^${escapeRegex(query.trim())}$`, "i") },
+    query: { $regex: new RegExp(`^${escapeRegex(cleanQ)}$`, "i") },
   }).lean();
 
   if (!group) {
@@ -701,14 +706,28 @@ const importLeads = async (
 
   if (!targetGroup) {
     const activeName =
-      (groupName || "Imported Leads").trim() || "Imported Leads";
-    const newGroupId = `group-${now}-${Math.random().toString(36).slice(2, 9)}`;
-    targetGroup = await SearchGroupModel.create({
-      groupId: newGroupId,
-      query: activeName,
-      createdAt: now,
-      updatedAt: now,
+      (groupName || "imported leads").trim().toLowerCase() || "imported leads";
+
+    // Try finding existing group with same name (case-insensitive)
+    targetGroup = await SearchGroupModel.findOne({
+      query: { $regex: new RegExp(`^${escapeRegex(activeName)}$`, "i") },
     });
+
+    if (!targetGroup) {
+      const newGroupId = `group-${now}-${Math.random().toString(36).slice(2, 9)}`;
+      targetGroup = await SearchGroupModel.create({
+        groupId: newGroupId,
+        query: activeName,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      if (targetGroup.query !== activeName) {
+        targetGroup.query = activeName;
+      }
+      targetGroup.updatedAt = now;
+      await targetGroup.save();
+    }
   } else {
     targetGroup.updatedAt = now;
     await targetGroup.save();

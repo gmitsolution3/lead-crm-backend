@@ -13,6 +13,7 @@ const searchGroupSchema = new Schema<TSearchGroupDocument>(
       type: String,
       required: true,
       trim: true,
+      lowercase: true,
       index: true,
     },
     createdAt: {

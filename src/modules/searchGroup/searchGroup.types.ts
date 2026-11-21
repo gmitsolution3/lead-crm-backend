@@ -24,7 +24,23 @@ export type TGetSearchGroupsQuery = {
   page?: string | number;
   limit?: string | number;
   search?: string;
-  sortBy?: "newest" | "oldest" | "query_asc" | "query_desc" | string;
+  sortBy?:
+    | "newest"
+    | "oldest"
+    | "query_asc"
+    | "query_desc"
+    | "most_leads"
+    | "least_leads"
+    | "most_potential"
+    | string;
+  potentialFilter?:
+    | "all"
+    | "has_potential"
+    | "no_potential"
+    | "high_potential"
+    | string;
+  sizeFilter?: "all" | "has_leads" | "empty" | "10_plus" | "50_plus" | string;
+  dateRange?: "all" | "today" | "7d" | "30d" | string;
 };
 
 export type TPaginatedSearchGroupsResponse = {
