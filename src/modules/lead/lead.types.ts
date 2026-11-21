@@ -87,3 +87,27 @@ export type TSaveLeadResult = {
   count: number;
   by?: string;
 };
+
+export type TGetLeadsQuery = {
+  page?: string | number;
+  limit?: string | number;
+  search?: string;
+  source?: string;
+  websiteFilter?: string;
+  groupId?: string;
+  searchQuery?: string;
+  sortBy?: string;
+};
+
+export type TPaginatedLeadsResponse = {
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    totalAll?: number;
+    noWebsiteCount?: number;
+    hasWebsiteCount?: number;
+  };
+  data: TLeadResponse[];
+};

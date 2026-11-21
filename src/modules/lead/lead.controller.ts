@@ -15,14 +15,15 @@ const getSearchGroups = catchAsync(async (_req: Request, res: Response) => {
   });
 });
 
-const getLeads = catchAsync(async (_req: Request, res: Response) => {
-  const result = await leadService.getLeads();
+const getLeads = catchAsync(async (req: Request, res: Response) => {
+  const result = await leadService.getLeads(req.query);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Leads retrieved successfully",
-    data: result,
+    meta: result.meta,
+    data: result.data,
   });
 });
 

@@ -5,6 +5,8 @@ import {
   TSaveLeadPayload,
   TSaveLeadResult,
   TSearchGroupResponse,
+  TGetLeadsQuery,
+  TPaginatedLeadsResponse,
 } from "./lead.types";
 
 export function normalizeUrl(url: string): string {
@@ -301,9 +303,163 @@ const getSearchGroups = async (): Promise<TSearchGroupResponse[]> => {
   });
 };
 
-const getLeads = async (): Promise<any[]> => {
-  const leads = await LeadModel.find({}).lean();
-  const formatted = leads.map((lead) => ({
+const getLeads = async (
+  query: TGetLeadsQuery = {},
+): Promise<TPaginatedLeadsResponse> => {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.max(1, Math.min(100, Number(query.limit) || 10));
+  const skip = (page - 1) * limit;
+
+  const matchConditions: any[] = [];
+
+  // 1. Group / Query filter
+  const targetGroup = (query.groupId || query.searchQuery || "").trim();
+  if (targetGroup && targetGroup !== "all") {
+    matchConditions.push({
+      $or: [
+        { groupId: targetGroup },
+        { searchQuery: targetGroup },
+        { searchQuery: new RegExp(`^${escapeRegex(targetGroup)}$`, "i") },
+      ],
+    });
+  }
+
+  // 2. Source filter
+  const sourceFilter = (query.source || "").trim();
+  if (sourceFilter && sourceFilter.toLowerCase() !== "all") {
+    matchConditions.push({
+      source: { $regex: new RegExp(`^${escapeRegex(sourceFilter)}$`, "i") },
+    });
+  }
+
+  // 3. Website filter (Potential Client: no website)
+  if (query.websiteFilter === "no-website") {
+    matchConditions.push({
+      $or: [
+        { website: "" },
+        { website: null },
+        { website: { $exists: false } },
+      ],
+    });
+  } else if (query.websiteFilter === "has-website") {
+    matchConditions.push({
+      website: { $exists: true, $ne: null, $gt: "" },
+    });
+  }
+
+  // 4. Text search matching
+  const search = (query.search || "").trim();
+  if (search) {
+    const sRegex = new RegExp(escapeRegex(search), "i");
+    matchConditions.push({
+      $or: [
+        { name: sRegex },
+        { phone: sRegex },
+        { email: sRegex },
+        { website: sRegex },
+        { address: sRegex },
+        { searchQuery: sRegex },
+        { remark: sRegex },
+      ],
+    });
+  }
+
+  const finalMatch =
+    matchConditions.length > 0 ? { $and: matchConditions } : {};
+
+  // Group scope for toolbar counts (unfiltered totals for this group)
+  const groupScope =
+    targetGroup && targetGroup !== "all"
+      ? {
+          $or: [
+            { groupId: targetGroup },
+            { searchQuery: targetGroup },
+            { searchQuery: new RegExp(`^${escapeRegex(targetGroup)}$`, "i") },
+          ],
+        }
+      : {};
+
+  const sourcePriorityField = {
+    $addFields: {
+      sourcePriority: {
+        $switch: {
+          branches: [
+            {
+              case: {
+                $regexMatch: {
+                  input: { $ifNull: ["$source", ""] },
+                  regex: /map|google/i,
+                },
+              },
+              then: 1,
+            },
+            {
+              case: {
+                $regexMatch: {
+                  input: { $ifNull: ["$source", ""] },
+                  regex: /facebook|fb/i,
+                },
+              },
+              then: 2,
+            },
+            {
+              case: {
+                $regexMatch: {
+                  input: { $ifNull: ["$source", ""] },
+                  regex: /linkedin/i,
+                },
+              },
+              then: 3,
+            },
+          ],
+          default: 4,
+        },
+      },
+    },
+  };
+
+  const sortStage: any =
+    query.sortBy === "newest"
+      ? { createdAt: -1 }
+      : query.sortBy === "oldest"
+      ? { createdAt: 1 }
+      : query.sortBy === "name_asc"
+      ? { name: 1 }
+      : query.sortBy === "name_desc"
+      ? { name: -1 }
+      : { sourcePriority: 1, createdAt: -1 };
+
+  const pipeline: any[] = [
+    { $match: finalMatch },
+    sourcePriorityField,
+    { $sort: sortStage },
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: limit }],
+        totalCount: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const [facetResults, totalAllInScope, noWebsiteInScope] =
+    await Promise.all([
+      LeadModel.aggregate(pipeline),
+      LeadModel.countDocuments(groupScope),
+      LeadModel.countDocuments({
+        ...groupScope,
+        $or: [
+          { website: "" },
+          { website: null },
+          { website: { $exists: false } },
+        ],
+      }),
+    ]);
+
+  const facet = facetResults[0] || { data: [], totalCount: [] };
+  const total = facet.totalCount[0]?.count || 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  const data = facet.data.map((lead: any) => ({
     id: lead.leadId,
     leadId: lead.leadId,
     groupId: lead.groupId,
@@ -322,7 +478,19 @@ const getLeads = async (): Promise<any[]> => {
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt,
   }));
-  return sortLeadsBySourcePriority(formatted);
+
+  return {
+    meta: {
+      page,
+      limit,
+      total,
+      totalPages,
+      totalAll: totalAllInScope,
+      noWebsiteCount: noWebsiteInScope,
+      hasWebsiteCount: Math.max(0, totalAllInScope - noWebsiteInScope),
+    },
+    data,
+  };
 };
 
 const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => {
