@@ -4,14 +4,15 @@ import { catchAsync } from "../../utils/catchAsync";
 import { sendResponse } from "../../utils/sendResponse";
 import { leadService } from "./lead.service";
 
-const getSearchGroups = catchAsync(async (_req: Request, res: Response) => {
-  const result = await leadService.getSearchGroups();
+const getSearchGroups = catchAsync(async (req: Request, res: Response) => {
+  const result = await leadService.getSearchGroups(req.query);
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
     message: "Search groups retrieved successfully",
-    data: result,
+    meta: result.meta,
+    data: result.data,
   });
 });
 

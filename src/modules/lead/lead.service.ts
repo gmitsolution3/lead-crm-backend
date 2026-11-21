@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { LeadModel, SearchGroupModel } from "./lead.model";
+import { searchGroupService } from "../searchGroup/searchGroup.service";
 import {
   TKnownLeads,
   TSaveLeadPayload,
@@ -7,6 +8,8 @@ import {
   TSearchGroupResponse,
   TGetLeadsQuery,
   TPaginatedLeadsResponse,
+  TGetSearchGroupsQuery,
+  TPaginatedSearchGroupsResponse,
 } from "./lead.types";
 
 export function normalizeUrl(url: string): string {
@@ -255,52 +258,8 @@ export function sortLeadsBySourcePriority<
   });
 }
 
-const getSearchGroups = async (): Promise<TSearchGroupResponse[]> => {
-  const groups = await SearchGroupModel.find({}).sort({ updatedAt: -1 }).lean();
-  if (groups.length === 0) return [];
-
-  const groupIds = groups.map((g) => g.groupId);
-  const leads = await LeadModel.find({ groupId: { $in: groupIds } })
-    .sort({ createdAt: 1 })
-    .lean();
-
-  const leadsByGroup = new Map<string, any[]>();
-  for (const lead of leads) {
-    const list = leadsByGroup.get(lead.groupId) || [];
-    list.push({
-      id: lead.leadId,
-      leadId: lead.leadId,
-      groupId: lead.groupId,
-      source: lead.source,
-      name: lead.name,
-      phone: lead.phone,
-      email: lead.email,
-      website: lead.website,
-      address: lead.address,
-      facebook: lead.facebook,
-      instagram: lead.instagram,
-      linkedin: lead.linkedin,
-      whatsapp: lead.whatsapp,
-      remark: lead.remark || "",
-      searchQuery: lead.searchQuery,
-      createdAt: lead.createdAt,
-      updatedAt: lead.updatedAt,
-    });
-    leadsByGroup.set(lead.groupId, list);
-  }
-
-  return groups.map((g) => {
-    const groupLeads = leadsByGroup.get(g.groupId) || [];
-    sortLeadsBySourcePriority(groupLeads);
-    return {
-      id: g.groupId,
-      groupId: g.groupId,
-      query: g.query,
-      createdAt: g.createdAt,
-      updatedAt: g.updatedAt,
-      leads: groupLeads,
-    };
-  });
+const getSearchGroups = async (query?: any) => {
+  return searchGroupService.getSearchGroups(query);
 };
 
 const getLeads = async (
@@ -652,7 +611,8 @@ const updateLeadRemark = async (
     );
   }
 
-  return getSearchGroups();
+  const res = await getSearchGroups();
+  return res.data;
 };
 
 const getKnownLeadsForQuery = async (query?: string): Promise<TKnownLeads> => {
@@ -714,15 +674,12 @@ const deleteLead = async (
     { groupId },
     { $set: { updatedAt: Date.now() } },
   );
-  return getSearchGroups();
+  const res = await getSearchGroups();
+  return res.data;
 };
 
-const deleteSearchGroup = async (
-  groupId: string,
-): Promise<TSearchGroupResponse[]> => {
-  await LeadModel.deleteMany({ groupId });
-  await SearchGroupModel.deleteOne({ groupId });
-  return getSearchGroups();
+const deleteSearchGroup = async (groupId: string): Promise<any> => {
+  return searchGroupService.deleteSearchGroup(groupId);
 };
 
 const clearAll = async (): Promise<void> => {
@@ -838,8 +795,8 @@ const importLeads = async (
   targetGroup.updatedAt = Date.now();
   await targetGroup.save();
 
-  const groups = await getSearchGroups();
-  return { searchGroups: groups, targetGroupId: targetGroup.groupId };
+  const groupsRes = await getSearchGroups();
+  return { searchGroups: groupsRes.data, targetGroupId: targetGroup.groupId };
 };
 
 function escapeRegex(str: string): string {

@@ -53,11 +53,30 @@ export type TLeadResponse = {
 
 export type TSearchGroupResponse = {
   id: string;
-  groupId?: string;
+  groupId: string;
   query: string;
   createdAt: number;
   updatedAt?: number;
-  leads: TLeadResponse[];
+  leadCount?: number;
+  potentialCount?: number;
+  leads?: TLeadResponse[];
+};
+
+export type TGetSearchGroupsQuery = {
+  page?: string | number;
+  limit?: string | number;
+  search?: string;
+  sortBy?: string;
+};
+
+export type TPaginatedSearchGroupsResponse = {
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  data: TSearchGroupResponse[];
 };
 
 export type TKnownLeads = {

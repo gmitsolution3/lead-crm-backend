@@ -1,6 +1,7 @@
 import { Router } from "express";
 import healthRoutes from "../modules/health/health.route";
 import leadRoutes from "../modules/lead/lead.route";
+import searchGroupRoutes from "../modules/searchGroup/searchGroup.route";
 
 const router = Router();
 
@@ -18,7 +19,7 @@ const moduleRoutes: {
   },
   {
     path: "/search-groups",
-    route: leadRoutes,
+    route: searchGroupRoutes,
   },
 ];
 

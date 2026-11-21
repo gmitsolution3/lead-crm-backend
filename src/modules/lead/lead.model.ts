@@ -1,34 +1,8 @@
 import { Schema, model } from "mongoose";
-import { TLeadDocument, TSearchGroupDocument } from "./lead.types";
+import { TLeadDocument } from "./lead.types";
+import { SearchGroupModel } from "../searchGroup/searchGroup.model";
 
-const searchGroupSchema = new Schema<TSearchGroupDocument>(
-  {
-    groupId: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
-    query: {
-      type: String,
-      required: true,
-      trim: true,
-      index: true,
-    },
-    createdAt: {
-      type: Number,
-      default: () => Date.now(),
-    },
-    updatedAt: {
-      type: Number,
-      default: () => Date.now(),
-    },
-  },
-  {
-    timestamps: false,
-    versionKey: false,
-  },
-);
+export { SearchGroupModel };
 
 const leadSchema = new Schema<TLeadDocument>(
   {
@@ -112,10 +86,5 @@ const leadSchema = new Schema<TLeadDocument>(
 // Compound indexes
 leadSchema.index({ groupId: 1, phone: 1 });
 leadSchema.index({ groupId: 1, name: 1 });
-
-export const SearchGroupModel = model<TSearchGroupDocument>(
-  "SearchGroup",
-  searchGroupSchema,
-);
 
 export const LeadModel = model<TLeadDocument>("Lead", leadSchema);

@@ -15,22 +15,7 @@ const router = Router();
 // Get all leads (paginated with search & filters)
 router.get("/all", leadController.getLeads);
 router.get("/paginated", leadController.getLeads);
-
-// Get search groups, or paginated leads if query params are present
-router.get("/", (req, res, next) => {
-  if (
-    req.query.page ||
-    req.query.limit ||
-    req.query.search ||
-    req.query.groupId ||
-    req.query.source ||
-    req.query.websiteFilter ||
-    req.query.sortBy
-  ) {
-    return leadController.getLeads(req, res, next);
-  }
-  return leadController.getSearchGroups(req, res, next);
-});
+router.get("/", leadController.getLeads);
 
 // Save / merge an individual lead
 router.post(
