@@ -1,7 +1,9 @@
 import { NextFunction, Response } from "express";
 import { AuthenticatedRequest } from "./auth.middleware";
 
-export const authorize = (requiredRole: "user" | "admin") => {
+export type Role = "user" | "moderator" | "admin";
+
+export const authorize = (requiredRole: Role | Role[]) => {
   return (
     req: AuthenticatedRequest,
     res: Response,
@@ -15,7 +17,13 @@ export const authorize = (requiredRole: "user" | "admin") => {
       });
     }
 
-    if (req.user.role !== requiredRole) {
+    const permittedRoles = Array.isArray(requiredRole)
+      ? requiredRole
+      : [requiredRole];
+
+    const userRole = (req.user as any).role as Role;
+
+    if (!permittedRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         statusCode: 403,

@@ -226,8 +226,33 @@ const getSearchGroupById = async (
 const deleteSearchGroup = async (
   groupId: string,
 ): Promise<TSearchGroupResponse[]> => {
-  await LeadModel.deleteMany({ groupId });
-  await SearchGroupModel.deleteOne({ groupId });
+  const cleanId = (groupId || "").trim();
+  if (!cleanId) {
+    const remaining = await getSearchGroups();
+    return remaining.data;
+  }
+
+  const group = await SearchGroupModel.findOne({
+    $or: [
+      { groupId: cleanId },
+      { query: new RegExp(`^${escapeRegex(cleanId)}$`, "i") },
+    ],
+  });
+
+  const targetGroupIds = Array.from(
+    new Set([cleanId, group?.groupId].filter(Boolean) as string[]),
+  );
+
+  await LeadModel.deleteMany({ groupId: { $in: targetGroupIds } });
+
+  if (group) {
+    await SearchGroupModel.deleteMany({
+      $or: [{ _id: group._id }, { groupId: { $in: targetGroupIds } }],
+    });
+  } else {
+    await SearchGroupModel.deleteMany({ groupId: { $in: targetGroupIds } });
+  }
+
   const remaining = await getSearchGroups();
   return remaining.data;
 };

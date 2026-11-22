@@ -24,7 +24,13 @@ export const auth = betterAuth({
     },
   },
 
-  plugins: [admin(), bearer()],
+  plugins: [
+    admin({
+      adminRoles: ["admin"],
+      defaultRole: "user",
+    }),
+    bearer(),
+  ],
 
   session: {
     expiresIn: 60 * 60 * 24,
