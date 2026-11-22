@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import { LeadModel, SearchGroupModel } from "./lead.model";
 import { searchGroupService } from "../searchGroup/searchGroup.service";
+import { AppError } from "../../utils/AppError";
+import { isStatusTransitionAllowed } from "./lead.constant";
 import {
   TKnownLeads,
   TSaveLeadPayload,
@@ -377,7 +379,6 @@ const getLeads = async (
         { website: sRegex },
         { address: sRegex },
         { searchQuery: sRegex },
-        { remark: sRegex },
         { "notes.content": sRegex },
         { "assignedTo.name": sRegex },
         { "lastContactedBy.name": sRegex },
@@ -529,7 +530,6 @@ const getLeads = async (
     instagram: lead.instagram,
     linkedin: lead.linkedin,
     whatsapp: lead.whatsapp,
-    remark: lead.remark || "",
     searchQuery: lead.searchQuery,
     status: lead.status || "uncontacted",
     priority: lead.priority || "medium",
@@ -660,8 +660,14 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       existing.whatsapp = payload.whatsapp;
       changed = true;
     }
-    if (payload.remark && payload.remark !== existing.remark) {
-      existing.remark = payload.remark;
+    const incomingNote = (payload as any).initialNote || (payload as any).remark;
+    if (incomingNote && incomingNote.trim()) {
+      existing.notes = existing.notes || [];
+      existing.notes.push({
+        noteId: `note-${now}-${Math.random().toString(36).slice(2, 9)}`,
+        content: incomingNote.trim(),
+        createdAt: now,
+      });
       changed = true;
     }
     if ((payload as any).status && (payload as any).status !== existing.status) {
@@ -734,14 +740,24 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
     instagram: payload.instagram || "",
     linkedin: payload.linkedin || "",
     whatsapp: payload.whatsapp || "",
-    remark: payload.remark || "",
     status: (payload as any).status || "uncontacted",
     priority: (payload as any).priority || "medium",
     followUpDate: (payload as any).followUpDate || null,
     dealValue: Number((payload as any).dealValue) || 0,
     assignedTo: (payload as any).assignedTo || {},
     lastContactedBy: (payload as any).lastContactedBy || {},
-    notes: (payload as any).notes || [],
+    notes: (() => {
+      const notesList: any[] = Array.isArray((payload as any).notes) ? [...(payload as any).notes] : [];
+      const initNote = (payload as any).initialNote || (payload as any).remark;
+      if (initNote && initNote.trim()) {
+        notesList.push({
+          noteId: `note-${now}-${Math.random().toString(36).slice(2, 9)}`,
+          content: initNote.trim(),
+          createdAt: now,
+        });
+      }
+      return notesList;
+    })(),
     createdAt: now,
     updatedAt: now,
   });
@@ -753,28 +769,6 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
   };
 };
 
-const updateLeadRemark = async (
-  leadId: string,
-  remark: string,
-  groupId?: string,
-): Promise<TSearchGroupResponse[]> => {
-  const now = Date.now();
-  await LeadModel.updateOne(
-    { leadId },
-    { $set: { remark: remark || "", updatedAt: now } },
-  );
-
-  if (groupId) {
-    await SearchGroupModel.updateOne(
-      { groupId },
-      { $set: { updatedAt: now } },
-    );
-  }
-
-  const res = await getSearchGroups();
-  return res.data;
-};
-
 const updateLead = async (
   leadId: string,
   payload: {
@@ -782,9 +776,9 @@ const updateLead = async (
     priority?: string;
     followUpDate?: number | null;
     dealValue?: number;
-    remark?: string;
     assignedTo?: { userId?: string; name?: string; email?: string };
     lastContactedBy?: { userId?: string; name?: string; email?: string };
+    updatedBy?: { userId?: string; name?: string; email?: string };
     lastContactedAt?: number | null;
     callCount?: number;
     incrementCallCount?: boolean;
@@ -794,18 +788,33 @@ const updateLead = async (
   const now = Date.now();
   const updateFields: any = { updatedAt: now };
 
-  if (payload.status !== undefined) updateFields.status = payload.status;
+  if (payload.status !== undefined) {
+    const existing = await LeadModel.findOne({ leadId }).select("status");
+    const currentStatus = existing?.status || "uncontacted";
+    if (!isStatusTransitionAllowed(currentStatus, payload.status)) {
+      throw new AppError(
+        400,
+        `Invalid status transition from "${currentStatus}" to "${payload.status}".`
+      );
+    }
+    updateFields.status = payload.status;
+  }
   if (payload.priority !== undefined) updateFields.priority = payload.priority;
   if (payload.followUpDate !== undefined)
     updateFields.followUpDate = payload.followUpDate;
   if (payload.dealValue !== undefined)
     updateFields.dealValue = Number(payload.dealValue) || 0;
-  if (payload.remark !== undefined) updateFields.remark = payload.remark;
-  if (payload.assignedTo !== undefined) updateFields.assignedTo = payload.assignedTo;
-  if (payload.lastContactedBy !== undefined)
-    updateFields.lastContactedBy = payload.lastContactedBy;
   if (payload.lastContactedAt !== undefined)
     updateFields.lastContactedAt = payload.lastContactedAt;
+
+  // Automatically assign moderator/admin as dealt by when updating info
+  const actor = payload.updatedBy || payload.assignedTo || payload.lastContactedBy;
+  if (actor && (actor.userId || actor.name)) {
+    updateFields.lastContactedBy = actor;
+    updateFields.assignedTo = actor;
+  } else if (payload.assignedTo !== undefined) {
+    updateFields.assignedTo = payload.assignedTo;
+  }
 
   const updateOp: any = { $set: updateFields };
   if (payload.incrementCallCount) {
@@ -858,15 +867,28 @@ const addLeadNote = async (
     updatedAt: now,
     lastContactedAt: now,
   };
-  if (payload.createdBy?.name) {
+
+  // Automatically assign lead as dealt by the user adding the note
+  if (payload.createdBy && (payload.createdBy.userId || payload.createdBy.name)) {
     updateSet.lastContactedBy = payload.createdBy;
+    updateSet.assignedTo = payload.createdBy;
   }
 
+  // If lead is uncontacted, calling & adding a note automatically marks it as called
+  const existing = await LeadModel.findOne({ leadId });
+  if (!existing) return null;
+
+  if (existing.status === "uncontacted") {
+    updateSet.status = "called";
+  }
+
+  // Automatically increment callCount by 1 when a note is added
   const updated = await LeadModel.findOneAndUpdate(
     { leadId },
     {
       $push: { notes: newNote },
       $set: updateSet,
+      $inc: { callCount: 1 },
     },
     { new: true },
   );
@@ -958,16 +980,22 @@ const getKnownLeadsForQuery = async (query?: string): Promise<TKnownLeads> => {
 };
 
 const deleteLead = async (
-  groupId: string,
-  leadId: string,
-): Promise<TSearchGroupResponse[]> => {
-  await LeadModel.deleteOne({ groupId, leadId });
-  await SearchGroupModel.updateOne(
-    { groupId },
-    { $set: { updatedAt: Date.now() } },
-  );
-  const res = await getSearchGroups();
-  return res.data;
+  groupId?: string,
+  leadId?: string,
+): Promise<any> => {
+  let gId = groupId;
+  if (!gId && leadId) {
+    const existing = await LeadModel.findOne({ leadId }).select("groupId").lean();
+    gId = existing?.groupId;
+  }
+  await LeadModel.deleteOne({ leadId });
+  if (gId) {
+    await SearchGroupModel.updateOne(
+      { groupId: gId },
+      { $set: { updatedAt: Date.now() } },
+    );
+  }
+  return { success: true, leadId };
 };
 
 const deleteSearchGroup = async (groupId: string): Promise<any> => {
@@ -1061,8 +1089,14 @@ const importLeads = async (
         existing.whatsapp = raw.whatsapp;
         changed = true;
       }
-      if (raw.remark && raw.remark !== existing.remark) {
-        existing.remark = raw.remark;
+      const incomingNote = (raw as any).remark || (raw as any).note;
+      if (incomingNote && incomingNote.trim()) {
+        existing.notes = existing.notes || [];
+        existing.notes.push({
+          noteId: `note-${now}-${Math.random().toString(36).slice(2, 9)}`,
+          content: incomingNote.trim(),
+          createdAt: now,
+        });
         changed = true;
       }
       if (changed) {
@@ -1075,6 +1109,16 @@ const importLeads = async (
         (typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `lead-${now}-${Math.random().toString(36).slice(2, 9)}`);
+
+      const initialNoteText = (raw as any).remark || (raw as any).note;
+      const initialNotes: any[] = [];
+      if (initialNoteText && initialNoteText.trim()) {
+        initialNotes.push({
+          noteId: `note-${now}-${Math.random().toString(36).slice(2, 9)}`,
+          content: initialNoteText.trim(),
+          createdAt: now,
+        });
+      }
 
       const newDoc = await LeadModel.create({
         leadId,
@@ -1090,7 +1134,7 @@ const importLeads = async (
         instagram: raw.instagram || "",
         linkedin: raw.linkedin || "",
         whatsapp: raw.whatsapp || "",
-        remark: raw.remark || "",
+        notes: initialNotes,
         createdAt: now,
         updatedAt: now,
       });
@@ -1113,7 +1157,6 @@ export const leadService = {
   getSearchGroups,
   getLeads,
   saveLead,
-  updateLeadRemark,
   updateLead,
   addLeadNote,
   deleteLeadNote,

@@ -13,7 +13,7 @@ export const saveLeadValidationSchema = z.object({
     instagram: z.string().nullable().optional(),
     linkedin: z.string().nullable().optional(),
     whatsapp: z.string().nullable().optional(),
-    remark: z.string().nullable().optional(),
+    initialNote: z.string().nullable().optional(),
     searchQuery: z.string().nullable().optional(),
   }).passthrough(),
 });
@@ -33,23 +33,12 @@ export const importLeadsValidationSchema = z.object({
         instagram: z.string().nullable().optional(),
         linkedin: z.string().nullable().optional(),
         whatsapp: z.string().nullable().optional(),
-        remark: z.string().nullable().optional(),
         searchQuery: z.string().nullable().optional(),
       }).passthrough(),
     ),
     groupName: z.string().nullable().optional(),
     groupId: z.string().nullable().optional(),
   }).passthrough(),
-});
-
-export const updateLeadRemarkValidationSchema = z.object({
-  params: z.object({
-    leadId: z.string(),
-  }),
-  body: z.object({
-    remark: z.string(),
-    groupId: z.string().optional(),
-  }),
 });
 
 export const updateLeadValidationSchema = z.object({
@@ -71,7 +60,6 @@ export const updateLeadValidationSchema = z.object({
     priority: z.enum(["low", "medium", "high"]).optional(),
     followUpDate: z.number().nullable().optional(),
     dealValue: z.number().optional(),
-    remark: z.string().optional(),
     assignedTo: z
       .object({
         userId: z.string().optional(),

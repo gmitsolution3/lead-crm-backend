@@ -8,7 +8,6 @@ import {
   importLeadsValidationSchema,
   knownLeadsQueryValidationSchema,
   saveLeadValidationSchema,
-  updateLeadRemarkValidationSchema,
   updateLeadValidationSchema,
 } from "./lead.validation";
 
@@ -33,19 +32,15 @@ router.post(
   leadController.saveLead,
 );
 
-// Update lead remark
-router.patch(
-  "/:leadId/remark",
-  validateRequest(updateLeadRemarkValidationSchema),
-  leadController.updateLeadRemark,
-);
-
 // Update lead management details (status, priority, follow-up, dealValue, etc.)
 router.patch(
   "/:leadId",
   validateRequest(updateLeadValidationSchema),
   leadController.updateLead,
 );
+
+// Delete lead directly by leadId
+router.delete("/:leadId", leadController.deleteLead);
 
 // Add note to lead timeline
 router.post(
@@ -58,13 +53,6 @@ router.post(
 router.delete(
   "/:leadId/notes/:noteId",
   leadController.deleteLeadNote,
-);
-
-// Compatibility route for updating remark with group scope
-router.patch(
-  "/group/:groupId/lead/:leadId/remark",
-  validateRequest(updateLeadRemarkValidationSchema),
-  leadController.updateLeadRemark,
 );
 
 // Import multiple leads (e.g. CSV import)

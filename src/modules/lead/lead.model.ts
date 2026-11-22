@@ -84,10 +84,6 @@ const leadSchema = new Schema<TLeadDocument>(
       type: String,
       default: "",
     },
-    remark: {
-      type: String,
-      default: "",
-    },
     status: {
       type: String,
       enum: [

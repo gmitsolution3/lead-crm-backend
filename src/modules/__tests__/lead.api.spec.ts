@@ -96,22 +96,25 @@ describe("Lead API Integration End-to-End", () => {
     assert.ok(json.data.phoneDigits.includes("15559876543"));
   });
 
-  it("PATCH /leads/:leadId/remark updates lead remark", async () => {
-    const res = await fetch(`${baseUrl}/leads/${encodeURIComponent(createdLeadId)}/remark`, {
-      method: "PATCH",
+  it("POST /leads/:leadId/notes adds an activity note and increments call count", async () => {
+    const res = await fetch(`${baseUrl}/leads/${encodeURIComponent(createdLeadId)}/notes`, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ remark: "High priority lead", groupId: createdGroupId }),
+      body: JSON.stringify({
+        content: "High priority lead - spoke with owner",
+        groupId: createdGroupId,
+        createdBy: { name: "Agent Test", email: "test@lead.com" },
+      }),
     });
 
     assert.equal(res.status, 200);
     const json: any = await res.json();
     assert.equal(json.success, true);
-
-    const group = json.data.find((g: any) => (g.groupId || g.id) === createdGroupId);
-    assert.ok(group);
-    const lead = group.leads.find((l: any) => (l.leadId || l.id) === createdLeadId);
-    assert.ok(lead);
-    assert.equal(lead.remark, "High priority lead");
+    assert.ok(json.data);
+    assert.equal(json.data.callCount, 1);
+    assert.equal(json.data.status, "called");
+    assert.ok(Array.isArray(json.data.notes));
+    assert.equal(json.data.notes[0].content, "High priority lead - spoke with owner");
   });
 
   it("DELETE /leads/group/:groupId cleans up the test search group", async () => {

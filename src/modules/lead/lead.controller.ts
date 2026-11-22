@@ -39,19 +39,6 @@ const saveLead = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-const updateLeadRemark = catchAsync(async (req: Request, res: Response) => {
-  const leadId = req.params.leadId as string;
-  const { remark, groupId } = req.body;
-  const result = await leadService.updateLeadRemark(leadId, remark, groupId);
-
-  sendResponse(res, {
-    statusCode: httpStatus.OK,
-    success: true,
-    message: "Lead remark updated successfully",
-    data: result,
-  });
-});
-
 const updateLead = catchAsync(async (req: Request, res: Response) => {
   const leadId = req.params.leadId as string;
   const result = await leadService.updateLead(leadId, req.body);
@@ -125,7 +112,7 @@ const getKnownLeadsForQuery = catchAsync(
 );
 
 const deleteLead = catchAsync(async (req: Request, res: Response) => {
-  const groupId = req.params.groupId as string;
+  const groupId = (req.params.groupId || req.query.groupId || req.body?.groupId) as string | undefined;
   const leadId = req.params.leadId as string;
   const result = await leadService.deleteLead(groupId, leadId);
 
@@ -176,7 +163,6 @@ export const leadController = {
   getSearchGroups,
   getLeads,
   saveLead,
-  updateLeadRemark,
   updateLead,
   addLeadNote,
   deleteLeadNote,

@@ -38,7 +38,6 @@ export type TLead = {
   instagram?: string;
   linkedin?: string;
   whatsapp?: string;
-  remark?: string;
   status?: TLeadStatus;
   priority?: TLeadPriority;
   followUpDate?: number | null;
@@ -79,7 +78,6 @@ export type TLeadResponse = {
   linkedin?: string;
   whatsapp?: string;
   searchQuery?: string;
-  remark?: string;
   status?: TLeadStatus;
   priority?: TLeadPriority;
   followUpDate?: number | null;
@@ -141,7 +139,8 @@ export type TSaveLeadPayload = {
   linkedin?: string;
   whatsapp?: string;
   searchQuery?: string;
-  remark?: string;
+  initialNote?: string;
+  notes?: TLeadNote[];
 };
 
 export type TSaveLeadResult = {
