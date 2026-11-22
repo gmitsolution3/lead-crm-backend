@@ -52,6 +52,64 @@ const updateLeadRemark = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const updateLead = catchAsync(async (req: Request, res: Response) => {
+  const leadId = req.params.leadId as string;
+  const result = await leadService.updateLead(leadId, req.body);
+
+  if (!result) {
+    sendResponse(res, {
+      statusCode: httpStatus.NOT_FOUND,
+      success: false,
+      message: "Lead not found",
+      data: null,
+    });
+    return;
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Lead updated successfully",
+    data: result,
+  });
+});
+
+const addLeadNote = catchAsync(async (req: Request, res: Response) => {
+  const leadId = req.params.leadId as string;
+  const result = await leadService.addLeadNote(leadId, req.body);
+
+  if (!result) {
+    sendResponse(res, {
+      statusCode: httpStatus.NOT_FOUND,
+      success: false,
+      message: "Lead not found",
+      data: null,
+    });
+    return;
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Note added successfully",
+    data: result,
+  });
+});
+
+const deleteLeadNote = catchAsync(async (req: Request, res: Response) => {
+  const leadId = req.params.leadId as string;
+  const noteId = req.params.noteId as string;
+  const groupId = req.query.groupId as string | undefined;
+  const result = await leadService.deleteLeadNote(leadId, noteId, groupId);
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Note deleted successfully",
+    data: result,
+  });
+});
+
 const getKnownLeadsForQuery = catchAsync(
   async (req: Request, res: Response) => {
     const query = req.query.query as string | undefined;
@@ -119,6 +177,9 @@ export const leadController = {
   getLeads,
   saveLead,
   updateLeadRemark,
+  updateLead,
+  addLeadNote,
+  deleteLeadNote,
   getKnownLeadsForQuery,
   deleteLead,
   deleteSearchGroup,

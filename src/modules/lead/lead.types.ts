@@ -1,5 +1,29 @@
 import { Document } from "mongoose";
 
+export type TLeadStatus =
+  | "uncontacted"
+  | "called"
+  | "call_later"
+  | "interested"
+  | "not_interested"
+  | "converted"
+  | "invalid";
+
+export type TLeadPriority = "low" | "medium" | "high";
+
+export type TLeadUser = {
+  userId?: string;
+  name?: string;
+  email?: string;
+};
+
+export type TLeadNote = {
+  noteId: string;
+  content: string;
+  createdAt: number;
+  createdBy?: TLeadUser;
+};
+
 export type TLead = {
   leadId: string;
   groupId: string;
@@ -15,6 +39,15 @@ export type TLead = {
   linkedin?: string;
   whatsapp?: string;
   remark?: string;
+  status?: TLeadStatus;
+  priority?: TLeadPriority;
+  followUpDate?: number | null;
+  dealValue?: number;
+  lastContactedAt?: number | null;
+  callCount?: number;
+  assignedTo?: TLeadUser;
+  lastContactedBy?: TLeadUser;
+  notes?: TLeadNote[];
   createdAt: number;
   updatedAt: number;
 };
@@ -47,6 +80,15 @@ export type TLeadResponse = {
   whatsapp?: string;
   searchQuery?: string;
   remark?: string;
+  status?: TLeadStatus;
+  priority?: TLeadPriority;
+  followUpDate?: number | null;
+  dealValue?: number;
+  lastContactedAt?: number | null;
+  callCount?: number;
+  assignedTo?: TLeadUser;
+  lastContactedBy?: TLeadUser;
+  notes?: TLeadNote[];
   createdAt?: number;
   updatedAt?: number;
 };
@@ -118,6 +160,10 @@ export type TGetLeadsQuery = {
   groupId?: string;
   searchQuery?: string;
   sortBy?: string;
+  status?: string;
+  priority?: string;
+  followUpFilter?: string;
+  assignedTo?: string;
 };
 
 export type TPaginatedLeadsResponse = {
@@ -129,6 +175,9 @@ export type TPaginatedLeadsResponse = {
     totalAll?: number;
     noWebsiteCount?: number;
     hasWebsiteCount?: number;
+    interestedCount?: number;
+    overdueCount?: number;
+    convertedCount?: number;
   };
   data: TLeadResponse[];
 };

@@ -307,7 +307,65 @@ const getLeads = async (
     });
   }
 
-  // 4. Text search matching
+  // 4. Status filter
+  const statusFilter = (query.status || "").trim();
+  if (statusFilter && statusFilter.toLowerCase() !== "all") {
+    matchConditions.push({ status: statusFilter });
+  }
+
+  // 5. Priority filter
+  const priorityFilter = (query.priority || "").trim();
+  if (priorityFilter && priorityFilter.toLowerCase() !== "all") {
+    matchConditions.push({ priority: priorityFilter });
+  }
+
+  // 6. Follow-up filter
+  const followUpFilter = (query.followUpFilter || "").trim();
+  const nowMs = Date.now();
+  if (followUpFilter === "overdue") {
+    matchConditions.push({
+      followUpDate: { $gt: 0, $lt: nowMs },
+      status: { $nin: ["converted", "not_interested", "invalid"] },
+    });
+  } else if (followUpFilter === "today") {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+    matchConditions.push({
+      followUpDate: { $gte: startOfDay.getTime(), $lte: endOfDay.getTime() },
+    });
+  } else if (followUpFilter === "upcoming") {
+    matchConditions.push({
+      followUpDate: { $gt: nowMs },
+    });
+  } else if (followUpFilter === "has-followup") {
+    matchConditions.push({
+      followUpDate: { $gt: 0 },
+    });
+  } else if (followUpFilter === "no-followup") {
+    matchConditions.push({
+      $or: [{ followUpDate: null }, { followUpDate: { $exists: false } }],
+    });
+  }
+
+  // 7. Assigned / Dealt By filter
+  const assignedToFilter = (query.assignedTo || "").trim();
+  if (assignedToFilter && assignedToFilter.toLowerCase() !== "all") {
+    matchConditions.push({
+      $or: [
+        { "assignedTo.userId": assignedToFilter },
+        { "assignedTo.email": assignedToFilter },
+        {
+          "assignedTo.name": {
+            $regex: new RegExp(escapeRegex(assignedToFilter), "i"),
+          },
+        },
+      ],
+    });
+  }
+
+  // 8. Text search matching
   const search = (query.search || "").trim();
   if (search) {
     const sRegex = new RegExp(escapeRegex(search), "i");
@@ -320,6 +378,9 @@ const getLeads = async (
         { address: sRegex },
         { searchQuery: sRegex },
         { remark: sRegex },
+        { "notes.content": sRegex },
+        { "assignedTo.name": sRegex },
+        { "lastContactedBy.name": sRegex },
       ],
     });
   }
@@ -378,6 +439,21 @@ const getLeads = async (
     },
   };
 
+  const priorityRankField = {
+    $addFields: {
+      priorityRank: {
+        $switch: {
+          branches: [
+            { case: { $eq: ["$priority", "high"] }, then: 1 },
+            { case: { $eq: ["$priority", "medium"] }, then: 2 },
+            { case: { $eq: ["$priority", "low"] }, then: 3 },
+          ],
+          default: 2,
+        },
+      },
+    },
+  };
+
   const sortStage: any =
     query.sortBy === "newest"
       ? { createdAt: -1 }
@@ -387,11 +463,18 @@ const getLeads = async (
       ? { name: 1 }
       : query.sortBy === "name_desc"
       ? { name: -1 }
+      : query.sortBy === "followup_asc"
+      ? { followUpDate: 1, createdAt: -1 }
+      : query.sortBy === "deal_desc"
+      ? { dealValue: -1, createdAt: -1 }
+      : query.sortBy === "priority_desc"
+      ? { priorityRank: 1, createdAt: -1 }
       : { sourcePriority: 1, createdAt: -1 };
 
   const pipeline: any[] = [
     { $match: finalMatch },
     sourcePriorityField,
+    priorityRankField,
     { $sort: sortStage },
     {
       $facet: {
@@ -401,19 +484,32 @@ const getLeads = async (
     },
   ];
 
-  const [facetResults, totalAllInScope, noWebsiteInScope] =
-    await Promise.all([
-      LeadModel.aggregate(pipeline),
-      LeadModel.countDocuments(groupScope),
-      LeadModel.countDocuments({
-        ...groupScope,
-        $or: [
-          { website: "" },
-          { website: null },
-          { website: { $exists: false } },
-        ],
-      }),
-    ]);
+  const [
+    facetResults,
+    totalAllInScope,
+    noWebsiteInScope,
+    interestedInScope,
+    overdueInScope,
+    convertedInScope,
+  ] = await Promise.all([
+    LeadModel.aggregate(pipeline),
+    LeadModel.countDocuments(groupScope),
+    LeadModel.countDocuments({
+      ...groupScope,
+      $or: [
+        { website: "" },
+        { website: null },
+        { website: { $exists: false } },
+      ],
+    }),
+    LeadModel.countDocuments({ ...groupScope, status: "interested" }),
+    LeadModel.countDocuments({
+      ...groupScope,
+      followUpDate: { $gt: 0, $lt: Date.now() },
+      status: { $nin: ["converted", "not_interested", "invalid"] },
+    }),
+    LeadModel.countDocuments({ ...groupScope, status: "converted" }),
+  ]);
 
   const facet = facetResults[0] || { data: [], totalCount: [] };
   const total = facet.totalCount[0]?.count || 0;
@@ -435,6 +531,15 @@ const getLeads = async (
     whatsapp: lead.whatsapp,
     remark: lead.remark || "",
     searchQuery: lead.searchQuery,
+    status: lead.status || "uncontacted",
+    priority: lead.priority || "medium",
+    followUpDate: lead.followUpDate || null,
+    dealValue: lead.dealValue || 0,
+    lastContactedAt: lead.lastContactedAt || null,
+    callCount: lead.callCount || 0,
+    assignedTo: lead.assignedTo || {},
+    lastContactedBy: lead.lastContactedBy || {},
+    notes: Array.isArray(lead.notes) ? lead.notes : [],
     createdAt: lead.createdAt,
     updatedAt: lead.updatedAt,
   }));
@@ -448,6 +553,9 @@ const getLeads = async (
       totalAll: totalAllInScope,
       noWebsiteCount: noWebsiteInScope,
       hasWebsiteCount: Math.max(0, totalAllInScope - noWebsiteInScope),
+      interestedCount: interestedInScope,
+      overdueCount: overdueInScope,
+      convertedCount: convertedInScope,
     },
     data,
   };
@@ -556,6 +664,36 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
       existing.remark = payload.remark;
       changed = true;
     }
+    if ((payload as any).status && (payload as any).status !== existing.status) {
+      existing.status = (payload as any).status;
+      changed = true;
+    }
+    if ((payload as any).priority && (payload as any).priority !== existing.priority) {
+      existing.priority = (payload as any).priority;
+      changed = true;
+    }
+    if (
+      (payload as any).followUpDate !== undefined &&
+      (payload as any).followUpDate !== existing.followUpDate
+    ) {
+      existing.followUpDate = (payload as any).followUpDate;
+      changed = true;
+    }
+    if (
+      (payload as any).dealValue !== undefined &&
+      Number((payload as any).dealValue) !== existing.dealValue
+    ) {
+      existing.dealValue = Number((payload as any).dealValue);
+      changed = true;
+    }
+    if ((payload as any).assignedTo && Object.keys((payload as any).assignedTo).length > 0) {
+      existing.assignedTo = (payload as any).assignedTo;
+      changed = true;
+    }
+    if ((payload as any).lastContactedBy && Object.keys((payload as any).lastContactedBy).length > 0) {
+      existing.lastContactedBy = (payload as any).lastContactedBy;
+      changed = true;
+    }
 
     if (changed) {
       existing.updatedAt = now;
@@ -597,6 +735,13 @@ const saveLead = async (payload: TSaveLeadPayload): Promise<TSaveLeadResult> => 
     linkedin: payload.linkedin || "",
     whatsapp: payload.whatsapp || "",
     remark: payload.remark || "",
+    status: (payload as any).status || "uncontacted",
+    priority: (payload as any).priority || "medium",
+    followUpDate: (payload as any).followUpDate || null,
+    dealValue: Number((payload as any).dealValue) || 0,
+    assignedTo: (payload as any).assignedTo || {},
+    lastContactedBy: (payload as any).lastContactedBy || {},
+    notes: (payload as any).notes || [],
     createdAt: now,
     updatedAt: now,
   });
@@ -628,6 +773,137 @@ const updateLeadRemark = async (
 
   const res = await getSearchGroups();
   return res.data;
+};
+
+const updateLead = async (
+  leadId: string,
+  payload: {
+    status?: string;
+    priority?: string;
+    followUpDate?: number | null;
+    dealValue?: number;
+    remark?: string;
+    assignedTo?: { userId?: string; name?: string; email?: string };
+    lastContactedBy?: { userId?: string; name?: string; email?: string };
+    lastContactedAt?: number | null;
+    callCount?: number;
+    incrementCallCount?: boolean;
+    groupId?: string;
+  },
+): Promise<any | null> => {
+  const now = Date.now();
+  const updateFields: any = { updatedAt: now };
+
+  if (payload.status !== undefined) updateFields.status = payload.status;
+  if (payload.priority !== undefined) updateFields.priority = payload.priority;
+  if (payload.followUpDate !== undefined)
+    updateFields.followUpDate = payload.followUpDate;
+  if (payload.dealValue !== undefined)
+    updateFields.dealValue = Number(payload.dealValue) || 0;
+  if (payload.remark !== undefined) updateFields.remark = payload.remark;
+  if (payload.assignedTo !== undefined) updateFields.assignedTo = payload.assignedTo;
+  if (payload.lastContactedBy !== undefined)
+    updateFields.lastContactedBy = payload.lastContactedBy;
+  if (payload.lastContactedAt !== undefined)
+    updateFields.lastContactedAt = payload.lastContactedAt;
+
+  const updateOp: any = { $set: updateFields };
+  if (payload.incrementCallCount) {
+    updateOp.$inc = { callCount: 1 };
+    if (!payload.lastContactedAt) {
+      updateFields.lastContactedAt = now;
+    }
+  } else if (payload.callCount !== undefined) {
+    updateFields.callCount = payload.callCount;
+  }
+
+  const updated = await LeadModel.findOneAndUpdate(
+    { leadId },
+    updateOp,
+    { new: true },
+  );
+
+  if (payload.groupId) {
+    await SearchGroupModel.updateOne(
+      { groupId: payload.groupId },
+      { $set: { updatedAt: now } },
+    );
+  }
+
+  return updated;
+};
+
+const addLeadNote = async (
+  leadId: string,
+  payload: {
+    content: string;
+    createdBy?: { userId?: string; name?: string; email?: string };
+    groupId?: string;
+  },
+): Promise<any | null> => {
+  const now = Date.now();
+  const noteId =
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `note-${now}-${Math.random().toString(36).slice(2, 9)}`;
+
+  const newNote = {
+    noteId,
+    content: payload.content.trim(),
+    createdAt: now,
+    createdBy: payload.createdBy || {},
+  };
+
+  const updateSet: any = {
+    updatedAt: now,
+    lastContactedAt: now,
+  };
+  if (payload.createdBy?.name) {
+    updateSet.lastContactedBy = payload.createdBy;
+  }
+
+  const updated = await LeadModel.findOneAndUpdate(
+    { leadId },
+    {
+      $push: { notes: newNote },
+      $set: updateSet,
+    },
+    { new: true },
+  );
+
+  if (payload.groupId) {
+    await SearchGroupModel.updateOne(
+      { groupId: payload.groupId },
+      { $set: { updatedAt: now } },
+    );
+  }
+
+  return updated;
+};
+
+const deleteLeadNote = async (
+  leadId: string,
+  noteId: string,
+  groupId?: string,
+): Promise<any | null> => {
+  const now = Date.now();
+  const updated = await LeadModel.findOneAndUpdate(
+    { leadId },
+    {
+      $pull: { notes: { noteId } },
+      $set: { updatedAt: now },
+    },
+    { new: true },
+  );
+
+  if (groupId) {
+    await SearchGroupModel.updateOne(
+      { groupId },
+      { $set: { updatedAt: now } },
+    );
+  }
+
+  return updated;
 };
 
 const getKnownLeadsForQuery = async (query?: string): Promise<TKnownLeads> => {
@@ -838,6 +1114,9 @@ export const leadService = {
   getLeads,
   saveLead,
   updateLeadRemark,
+  updateLead,
+  addLeadNote,
+  deleteLeadNote,
   getKnownLeadsForQuery,
   deleteLead,
   deleteSearchGroup,

@@ -2,12 +2,14 @@ import { Router } from "express";
 import { validateRequest } from "../../middlewares/validateRequest";
 import { leadController } from "./lead.controller";
 import {
+  addLeadNoteValidationSchema,
   deleteGroupValidationSchema,
   deleteLeadValidationSchema,
   importLeadsValidationSchema,
   knownLeadsQueryValidationSchema,
   saveLeadValidationSchema,
   updateLeadRemarkValidationSchema,
+  updateLeadValidationSchema,
 } from "./lead.validation";
 
 const router = Router();
@@ -36,6 +38,26 @@ router.patch(
   "/:leadId/remark",
   validateRequest(updateLeadRemarkValidationSchema),
   leadController.updateLeadRemark,
+);
+
+// Update lead management details (status, priority, follow-up, dealValue, etc.)
+router.patch(
+  "/:leadId",
+  validateRequest(updateLeadValidationSchema),
+  leadController.updateLead,
+);
+
+// Add note to lead timeline
+router.post(
+  "/:leadId/notes",
+  validateRequest(addLeadNoteValidationSchema),
+  leadController.addLeadNote,
+);
+
+// Delete note from lead timeline
+router.delete(
+  "/:leadId/notes/:noteId",
+  leadController.deleteLeadNote,
 );
 
 // Compatibility route for updating remark with group scope
