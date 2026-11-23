@@ -11,6 +11,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5173",
   "https://enviroshield.vercel.app",
+  "https://gm-lead-crm.netlify.app",
 ];
 
 app.use(
@@ -20,6 +21,7 @@ app.use(
 
       if (
         allowedOrigins.includes(origin) ||
+        origin.endsWith(".netlify.app") ||
         origin.startsWith("chrome-extension://")
       ) {
         return callback(null, true);
