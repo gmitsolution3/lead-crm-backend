@@ -12,6 +12,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "https://enviroshield.vercel.app",
   "https://gm-lead-crm.netlify.app",
+  "https://gm-lead-crm.vercel.app"
 ];
 
 app.use(
