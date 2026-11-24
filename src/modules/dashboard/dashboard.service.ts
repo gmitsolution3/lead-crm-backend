@@ -1,6 +1,6 @@
 import { LeadModel } from "../lead/lead.model";
 import { SearchGroupModel } from "../searchGroup/searchGroup.model";
-import { settingsService } from "../settings/settings.service";
+import { getTargetForDate, settingsService } from "../settings/settings.service";
 import {
   TAdminDashboardResponse,
   TAdminTimeframe,
@@ -383,9 +383,11 @@ const getAdminDashboardData = async (
   const raw = aggregationResult[0] || {};
 
   // Velocity Metrics
+  const todayTarget = getTargetForDate(startOfToday, settings.targetHistory, dailyTarget);
+  const yesterdayTarget = getTargetForDate(startOfYesterday, settings.targetHistory, dailyTarget);
   const todayCount = raw.todayTouches?.[0]?.count || 0;
   const yesterdayCount = raw.yesterdayTouches?.[0]?.count || 0;
-  const progressPercent = Math.min(100, Math.round((todayCount / dailyTarget) * 100));
+  const progressPercent = Math.min(100, Math.round((todayCount / (todayTarget || 1)) * 100));
 
   // KPI Summary
   const kpiData = raw.kpiSummary?.[0] || {
@@ -478,18 +480,30 @@ const getAdminDashboardData = async (
   // Construct Buckets with Database Counts
   const buckets: TTrendBucket[] = bucketConfigs.map((b) => {
     const count = raw[b.key]?.[0]?.count || 0;
-    const metTarget = count >= periodBenchmark;
 
-    let tooltipText = `${b.label}: ${count} touches (${Math.round((count / (periodBenchmark || 1)) * 100)}% of goal)`;
-    if (timeframe === "1m") {
-      tooltipText = `${b.label}: ${count} touches`;
+    let bucketTarget = periodBenchmark;
+    if (timeframe === "7d" || timeframe === "1m") {
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget);
+    } else if (timeframe === "3m") {
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * 5;
+    } else if (timeframe === "6m" || timeframe === "1y") {
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * 22;
     }
+
+    const progressPercent = Math.round((count / (bucketTarget || 1)) * 100);
+    const metTarget = count >= bucketTarget;
+
+    const unitDesc = timeframe === "7d" || timeframe === "1m" ? "target" : "benchmark";
+    const statusDesc = metTarget ? "Target Met" : "Below Target";
+    const tooltipText = `${b.label}: ${count} / ${bucketTarget} touches (${progressPercent}% of ${unitDesc} • ${statusDesc})`;
 
     return {
       key: b.key,
       label: b.label,
       subLabel: b.subLabel,
       count,
+      target: bucketTarget,
+      progressPercent,
       metTarget,
       isCurrent: b.isCurrent,
       tooltipText,
@@ -499,19 +513,19 @@ const getAdminDashboardData = async (
   const totalTouchpoints = buckets.reduce((acc, b) => acc + b.count, 0);
   const divisor = buckets.length || 1;
   const periodAverage = Math.round((totalTouchpoints / divisor) * 10) / 10;
-  const maxBucketValue = Math.max(periodBenchmark * 1.3, ...buckets.map((b) => b.count), 1);
+  const maxBucketValue = Math.max(periodBenchmark * 1.3, ...buckets.map((b) => b.count), ...buckets.map((b) => b.target), 1);
 
   // Metric pills
   let metric1Label = "Today's Workspace Touches";
   let metric1Value = todayCount;
-  let metric1Sub = `${Math.round((todayCount / (dailyTarget || 1)) * 100)}% of daily benchmark`;
+  let metric1Sub = `${Math.round((todayCount / (todayTarget || 1)) * 100)}% of daily target (${todayCount} / ${todayTarget})`;
 
   let metric2Label = "Yesterday's Completed";
   let metric2Value = yesterdayCount;
   let metric2Sub =
-    yesterdayCount >= dailyTarget
-      ? "✓ Target benchmark met"
-      : `${dailyTarget - yesterdayCount} below target`;
+    yesterdayCount >= yesterdayTarget
+      ? `✓ Target met (${yesterdayCount} / ${yesterdayTarget})`
+      : `${yesterdayTarget - yesterdayCount} below target (${yesterdayCount} / ${yesterdayTarget})`;
 
   let metric4Label = `${timeframe.toUpperCase()} Daily Average`;
   let metric4Sub = `Benchmark: ${periodBenchmark} / ${benchmarkUnitLabel}`;
@@ -622,9 +636,9 @@ const getAdminDashboardData = async (
     velocity: {
       todayCount,
       yesterdayCount,
-      dailyTarget,
+      dailyTarget: todayTarget,
       progressPercent,
-      isTargetMet: todayCount >= dailyTarget,
+      isTargetMet: todayCount >= todayTarget,
       differenceFromYesterday: todayCount - yesterdayCount,
     },
     kpiSummary: {
@@ -837,11 +851,12 @@ const getModeratorDashboardData = async (
     }
   });
 
+  const todayTarget = getTargetForDate(startOfToday, settings.targetHistory, dailyTarget);
   const todayCount = raw.todayTouchesAll?.[0]?.count || 0;
   const yesterdayCount = raw.yesterdayTouchesAll?.[0]?.count || 0;
   const moderatorTodayCount = raw.moderatorTodayTouches?.[0]?.count || todayCount;
-  const remainingToGo = Math.max(0, dailyTarget - moderatorTodayCount);
-  const progressPercent = Math.min(100, Math.round((moderatorTodayCount / dailyTarget) * 100));
+  const remainingToGo = Math.max(0, todayTarget - moderatorTodayCount);
+  const progressPercent = Math.min(100, Math.round((moderatorTodayCount / (todayTarget || 1)) * 100));
 
   // Touchpoint Breakdown
   let calledToday = 0;
@@ -875,15 +890,15 @@ const getModeratorDashboardData = async (
   const totalLeads = Object.values(stageStats).reduce((acc, curr) => acc + curr, 0);
 
   return {
-    dailyTarget,
+    dailyTarget: todayTarget,
     kpiStats: {
-      dailyTarget,
+      dailyTarget: todayTarget,
       todayCount,
       moderatorTodayCount,
       yesterdayCount,
       remainingToGo,
       progressPercent,
-      isTargetMet: moderatorTodayCount >= dailyTarget,
+      isTargetMet: moderatorTodayCount >= todayTarget,
       calledToday,
       interestedToday,
       callLaterToday,

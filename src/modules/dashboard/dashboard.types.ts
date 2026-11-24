@@ -5,6 +5,8 @@ export interface TTrendBucket {
   label: string;
   subLabel: string;
   count: number;
+  target: number;
+  progressPercent: number;
   metTarget: boolean;
   isCurrent?: boolean;
   tooltipText: string;

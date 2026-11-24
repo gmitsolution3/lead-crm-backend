@@ -1,5 +1,29 @@
 import { Schema, model } from "mongoose";
-import { TSettingsDocument } from "./settings.types";
+import { TSettingsDocument, TTargetHistoryEntry } from "./settings.types";
+
+const targetHistorySchema = new Schema<TTargetHistoryEntry>(
+  {
+    effectiveDate: {
+      type: String,
+      required: true,
+    },
+    effectiveTimestamp: {
+      type: Number,
+      required: true,
+    },
+    target: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 1000,
+    },
+    updatedBy: {
+      type: String,
+      default: "",
+    },
+  },
+  { _id: false },
+);
 
 const settingsSchema = new Schema<TSettingsDocument>(
   {
@@ -16,6 +40,10 @@ const settingsSchema = new Schema<TSettingsDocument>(
       default: 25,
       min: 1,
       max: 1000,
+    },
+    targetHistory: {
+      type: [targetHistorySchema],
+      default: [],
     },
     dailyScrapeLimit: {
       type: Number,
