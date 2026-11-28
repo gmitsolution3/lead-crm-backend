@@ -43,6 +43,7 @@ export type TLead = {
   followUpDate?: number | null;
   dealValue?: number;
   lastContactedAt?: number | null;
+  lastMeaningfulContactAt?: number | null;
   callCount?: number;
   assignedTo?: TLeadUser;
   lastContactedBy?: TLeadUser;
@@ -83,6 +84,7 @@ export type TLeadResponse = {
   followUpDate?: number | null;
   dealValue?: number;
   lastContactedAt?: number | null;
+  lastMeaningfulContactAt?: number | null;
   callCount?: number;
   assignedTo?: TLeadUser;
   lastContactedBy?: TLeadUser;

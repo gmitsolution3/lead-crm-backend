@@ -117,6 +117,10 @@ const leadSchema = new Schema<TLeadDocument>(
       type: Number,
       default: null,
     },
+    lastMeaningfulContactAt: {
+      type: Number,
+      default: null,
+    },
     callCount: {
       type: Number,
       default: 0,

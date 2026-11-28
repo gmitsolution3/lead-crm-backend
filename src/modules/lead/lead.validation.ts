@@ -60,6 +60,7 @@ export const updateLeadValidationSchema = z.object({
     priority: z.enum(["low", "medium", "high"]).optional(),
     followUpDate: z.number().nullable().optional(),
     dealValue: z.number().optional(),
+    whatsapp: z.string().nullable().optional(),
     assignedTo: z
       .object({
         userId: z.string().optional(),

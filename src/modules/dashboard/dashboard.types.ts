@@ -15,6 +15,8 @@ export interface TTrendBucket {
 export interface TAdminDashboardResponse {
   timeframe: TAdminTimeframe;
   dailyTarget: number;
+  perModeratorTarget: number;
+  moderatorCount: number;
   velocity: {
     todayCount: number;
     yesterdayCount: number;
@@ -78,6 +80,18 @@ export interface TAdminDashboardResponse {
     email: string;
     role: string;
     todayTouches: number;
+    attemptsToday: number;
+    meaningfulContactsToday: number;
+    qualifiedToday: number;
+    convertedToday: number;
+    reachRate: number;
+    targets: {
+      dailyCallTarget: number;
+      dailyContactTarget: number;
+      dailyQualifiedTarget: number;
+      dailyConversionTarget: number;
+      isCustom: boolean;
+    };
     progressPercent: number;
     isMet: boolean;
     toGo: number;
@@ -100,15 +114,26 @@ export interface TModeratorDashboardResponse {
   dailyTarget: number;
   kpiStats: {
     dailyTarget: number;
+    dailyCallTarget: number;
+    dailyQualifiedTarget: number;
+    dailyConversionTarget: number;
+    isCustomTarget: boolean;
     todayCount: number;
     moderatorTodayCount: number;
+    attemptsToday: number;
+    qualifiedToday: number;
+    convertedToday: number;
+    reachRate: number;
     yesterdayCount: number;
     remainingToGo: number;
     progressPercent: number;
     isTargetMet: boolean;
     calledToday: number;
     interestedToday: number;
+    interestedOnlyToday: number;
     callLaterToday: number;
+    notInterestedToday: number;
+    invalidToday: number;
   };
   stageStats: {
     uncontacted: number;

@@ -1,5 +1,10 @@
 import { SettingsModel } from "./settings.model";
-import { TSettings, TTargetHistoryEntry, TUpdateSettingsPayload } from "./settings.types";
+import {
+  TModeratorTargetConfig,
+  TSettings,
+  TTargetHistoryEntry,
+  TUpdateSettingsPayload,
+} from "./settings.types";
 
 const WORKSPACE_SETTINGS_KEY = "workspace_settings";
 
@@ -8,6 +13,34 @@ const getTodayDateString = (d: Date = new Date()): string => {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+};
+
+const upsertTargetHistory = (
+  existingHistory: TTargetHistoryEntry[] = [],
+  todayStr: string,
+  startOfToday: number,
+  target: number,
+  updatedBy: string = "",
+): TTargetHistoryEntry[] => {
+  const history = [...existingHistory];
+  const todayIndex = history.findIndex((h) => h.effectiveDate === todayStr);
+  if (todayIndex >= 0) {
+    history[todayIndex] = {
+      ...history[todayIndex],
+      target,
+      effectiveTimestamp: startOfToday,
+      updatedBy: updatedBy || history[todayIndex].updatedBy,
+    };
+  } else {
+    history.push({
+      effectiveDate: todayStr,
+      effectiveTimestamp: startOfToday,
+      target,
+      updatedBy,
+    });
+  }
+  history.sort((a, b) => a.effectiveTimestamp - b.effectiveTimestamp);
+  return history;
 };
 
 export const getTargetForDate = (
@@ -107,32 +140,40 @@ const updateSettings = async (
 
   if (payload.dailyApproachTarget !== undefined) {
     updateData.dailyApproachTarget = payload.dailyApproachTarget;
+    updateData.targetHistory = upsertTargetHistory(
+      currentSettings?.targetHistory,
+      todayStr,
+      startOfToday,
+      payload.dailyApproachTarget,
+      payload.updatedBy || "",
+    );
+  }
 
-    const existingHistory: TTargetHistoryEntry[] = currentSettings?.targetHistory
-      ? [...currentSettings.targetHistory]
-      : [];
+  if (payload.dailyCallTarget !== undefined) {
+    updateData.dailyCallTarget = payload.dailyCallTarget;
+  }
+  if (payload.dailyQualifiedTarget !== undefined) {
+    updateData.dailyQualifiedTarget = payload.dailyQualifiedTarget;
+  }
+  if (payload.dailyConversionTarget !== undefined) {
+    updateData.dailyConversionTarget = payload.dailyConversionTarget;
+  }
 
-    // Check if entry for today already exists
-    const todayIndex = existingHistory.findIndex((h) => h.effectiveDate === todayStr);
-    if (todayIndex >= 0) {
-      existingHistory[todayIndex] = {
-        ...existingHistory[todayIndex],
-        target: payload.dailyApproachTarget,
-        effectiveTimestamp: startOfToday,
-        updatedBy: payload.updatedBy || existingHistory[todayIndex].updatedBy,
+  if (payload.moderatorTargets !== undefined) {
+    const existingList: TModeratorTargetConfig[] = currentSettings?.moderatorTargets || [];
+    updateData.moderatorTargets = payload.moderatorTargets.map((item) => {
+      const prev = existingList.find((m) => m.userId === item.userId);
+      return {
+        ...item,
+        targetHistory: upsertTargetHistory(
+          prev?.targetHistory,
+          todayStr,
+          startOfToday,
+          item.dailyContactTarget,
+          payload.updatedBy || "",
+        ),
       };
-    } else {
-      existingHistory.push({
-        effectiveDate: todayStr,
-        effectiveTimestamp: startOfToday,
-        target: payload.dailyApproachTarget,
-        updatedBy: payload.updatedBy || "",
-      });
-    }
-
-    // Keep history sorted chronologically
-    existingHistory.sort((a, b) => a.effectiveTimestamp - b.effectiveTimestamp);
-    updateData.targetHistory = existingHistory;
+    });
   }
 
   if (payload.dailyScrapeLimit !== undefined) {
@@ -161,8 +202,57 @@ const updateSettings = async (
   return updated as TSettings;
 };
 
+export const getModeratorTargetsForDate = (
+  userId: string | undefined,
+  dateOrTimestamp: number | Date,
+  settings: TSettings,
+) => {
+  const defaultContactTarget = getTargetForDate(
+    dateOrTimestamp,
+    settings.targetHistory,
+    settings.dailyApproachTarget || 25,
+  );
+  const defaultCallTarget = settings.dailyCallTarget ?? 40;
+  const defaultQualifiedTarget = settings.dailyQualifiedTarget ?? 5;
+  const defaultConversionTarget = settings.dailyConversionTarget ?? 1;
+
+  if (!userId || !settings.moderatorTargets?.length) {
+    return {
+      dailyCallTarget: defaultCallTarget,
+      dailyContactTarget: defaultContactTarget,
+      dailyQualifiedTarget: defaultQualifiedTarget,
+      dailyConversionTarget: defaultConversionTarget,
+      isCustom: false,
+    };
+  }
+
+  const mod = settings.moderatorTargets.find((m) => m.userId === userId);
+  if (!mod) {
+    return {
+      dailyCallTarget: defaultCallTarget,
+      dailyContactTarget: defaultContactTarget,
+      dailyQualifiedTarget: defaultQualifiedTarget,
+      dailyConversionTarget: defaultConversionTarget,
+      isCustom: false,
+    };
+  }
+
+  return {
+    dailyCallTarget: mod.dailyCallTarget ?? defaultCallTarget,
+    dailyContactTarget: getTargetForDate(
+      dateOrTimestamp,
+      mod.targetHistory,
+      mod.dailyContactTarget || defaultContactTarget,
+    ),
+    dailyQualifiedTarget: mod.dailyQualifiedTarget ?? defaultQualifiedTarget,
+    dailyConversionTarget: mod.dailyConversionTarget ?? defaultConversionTarget,
+    isCustom: true,
+  };
+};
+
 export const settingsService = {
   getSettings,
   updateSettings,
   getTargetForDate,
+  getModeratorTargetsForDate,
 };

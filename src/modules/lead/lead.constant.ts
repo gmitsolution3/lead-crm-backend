@@ -30,3 +30,19 @@ export function isStatusTransitionAllowed(
   if (!allowed) return true;
   return allowed.includes(targetStatus);
 }
+
+/**
+ * Statuses that indicate the moderator actually reached/spoke with the customer
+ * and obtained a meaningful outcome (excludes unanswered 'called', 'invalid', 'uncontacted').
+ */
+export const MEANINGFUL_CONTACT_STATUSES = [
+  "call_later",
+  "interested",
+  "converted",
+  "not_interested",
+] as const;
+
+export function isMeaningfulContactStatus(status?: string): boolean {
+  if (!status) return false;
+  return (MEANINGFUL_CONTACT_STATUSES as readonly string[]).includes(status);
+}

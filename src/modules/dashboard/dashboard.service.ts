@@ -1,12 +1,68 @@
+import { MEANINGFUL_CONTACT_STATUSES } from "../lead/lead.constant";
 import { LeadModel } from "../lead/lead.model";
 import { SearchGroupModel } from "../searchGroup/searchGroup.model";
-import { getTargetForDate, settingsService } from "../settings/settings.service";
+import {
+  getModeratorTargetsForDate,
+  getTargetForDate,
+  settingsService,
+} from "../settings/settings.service";
 import {
   TAdminDashboardResponse,
   TAdminTimeframe,
   TModeratorDashboardResponse,
   TTrendBucket,
 } from "./dashboard.types";
+
+/**
+ * Matches leads that represent a meaningful contact (customer actually reached/dealt with),
+ * explicitly excluding unanswered 'called', 'invalid', and 'uncontacted' statuses.
+ */
+const buildMeaningfulContactMatch = (start: number, end: number) => ({
+  status: { $in: [...MEANINGFUL_CONTACT_STATUSES] },
+  $or: [
+    { lastMeaningfulContactAt: { $gte: start, $lte: end } },
+    {
+      lastMeaningfulContactAt: null,
+      lastContactedAt: { $gte: start, $lte: end },
+    },
+    {
+      lastMeaningfulContactAt: null,
+      lastContactedAt: null,
+      updatedAt: { $gte: start, $lte: end },
+    },
+  ],
+});
+
+/**
+ * Matches any dial/outreach attempt (including unanswered 'called' and 'invalid').
+ */
+const buildAttemptMatch = (start: number, end: number) => ({
+  status: { $nin: ["uncontacted", null] },
+  $or: [
+    { lastContactedAt: { $gte: start, $lte: end } },
+    { "notes.createdAt": { $gte: start, $lte: end } },
+  ],
+});
+
+/**
+ * Counts how many active moderators existed on or before a given day's end timestamp.
+ */
+const getModeratorCountForDate = (
+  endTimestamp: number,
+  moderators: Array<{ createdAt?: Date | string | number }>,
+): number => {
+  const count = moderators.filter((m) => {
+    if (!m.createdAt) return true;
+    const createdMs =
+      m.createdAt instanceof Date
+        ? m.createdAt.getTime()
+        : typeof m.createdAt === "number"
+          ? m.createdAt
+          : new Date(m.createdAt).getTime();
+    return !isNaN(createdMs) ? createdMs <= endTimestamp : true;
+  }).length;
+  return Math.max(1, count);
+};
 
 interface BucketConfig {
   key: string;
@@ -150,62 +206,27 @@ const getAdminDashboardData = async (
 
   const bucketConfigs = buildTimeframeBucketConfigs(timeframe, now);
 
-  // Database-driven bucket facets
+  // Database-driven bucket facets (only Meaningful Contacts count toward target)
   const bucketFacets: Record<string, any[]> = {};
   bucketConfigs.forEach((b) => {
     bucketFacets[b.key] = [
-      {
-        $match: {
-          $or: [
-            { lastContactedAt: { $gte: b.start, $lte: b.end } },
-            {
-              status: { $nin: ["uncontacted", null] },
-              updatedAt: { $gte: b.start, $lte: b.end },
-            },
-            {
-              "notes.createdAt": { $gte: b.start, $lte: b.end },
-            },
-          ],
-        },
-      },
+      { $match: buildMeaningfulContactMatch(b.start, b.end) },
       { $count: "count" },
     ];
   });
 
-  // Run comprehensive MongoDB aggregation pipeline
-  const [aggregationResult, totalSearchClusters] = await Promise.all([
+  // Run comprehensive MongoDB aggregation pipeline + fetch active moderators with createdAt
+  const [aggregationResult, totalSearchClusters, activeModerators] = await Promise.all([
     LeadModel.aggregate([
       {
         $facet: {
-          // 1. Velocity Today & Yesterday
+          // 1. Velocity Today & Yesterday (Meaningful Contacts)
           todayTouches: [
-            {
-              $match: {
-                $or: [
-                  { lastContactedAt: { $gte: startOfToday, $lte: endOfToday } },
-                  {
-                    status: { $nin: ["uncontacted", null] },
-                    updatedAt: { $gte: startOfToday, $lte: endOfToday },
-                  },
-                  { "notes.createdAt": { $gte: startOfToday, $lte: endOfToday } },
-                ],
-              },
-            },
+            { $match: buildMeaningfulContactMatch(startOfToday, endOfToday) },
             { $count: "count" },
           ],
           yesterdayTouches: [
-            {
-              $match: {
-                $or: [
-                  { lastContactedAt: { $gte: startOfYesterday, $lte: endOfYesterday } },
-                  {
-                    status: { $nin: ["uncontacted", null] },
-                    updatedAt: { $gte: startOfYesterday, $lte: endOfYesterday },
-                  },
-                  { "notes.createdAt": { $gte: startOfYesterday, $lte: endOfYesterday } },
-                ],
-              },
-            },
+            { $match: buildMeaningfulContactMatch(startOfYesterday, endOfYesterday) },
             { $count: "count" },
           ],
 
@@ -287,16 +308,9 @@ const getAdminDashboardData = async (
           // 5. Dynamic Timeframe Buckets
           ...bucketFacets,
 
-          // 6. Moderator Leaderboard Touches Today
+          // 6. Moderator Leaderboard Multi-Metric Touches Today
           moderatorTouchesToday: [
-            {
-              $match: {
-                $or: [
-                  { lastContactedAt: { $gte: startOfToday, $lte: endOfToday } },
-                  { "notes.createdAt": { $gte: startOfToday, $lte: endOfToday } },
-                ],
-              },
-            },
+            { $match: buildAttemptMatch(startOfToday, endOfToday) },
             {
               $group: {
                 _id: {
@@ -321,7 +335,30 @@ const getAdminDashboardData = async (
                     ],
                   },
                 },
-                todayTouches: { $sum: 1 },
+                attemptsToday: { $sum: 1 },
+                meaningfulContactsToday: {
+                  $sum: {
+                    $cond: [
+                      { $in: ["$status", [...MEANINGFUL_CONTACT_STATUSES]] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                qualifiedToday: {
+                  $sum: {
+                    $cond: [
+                      { $in: ["$status", ["interested", "converted"]] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                convertedToday: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "converted"] }, 1, 0],
+                  },
+                },
               },
             },
           ],
@@ -378,13 +415,24 @@ const getAdminDashboardData = async (
       },
     ]),
     SearchGroupModel.countDocuments(),
+    LeadModel.db
+      .collection("user")
+      .find({ role: "moderator", banned: { $ne: true } })
+      .project({ createdAt: 1 })
+      .toArray(),
   ]);
 
   const raw = aggregationResult[0] || {};
+  const moderatorCount = getModeratorCountForDate(endOfToday, activeModerators);
+  const yesterdayModeratorCount = getModeratorCountForDate(endOfYesterday, activeModerators);
 
-  // Velocity Metrics
-  const todayTarget = getTargetForDate(startOfToday, settings.targetHistory, dailyTarget);
-  const yesterdayTarget = getTargetForDate(startOfYesterday, settings.targetHistory, dailyTarget);
+  // Velocity Metrics (Team Target = Active Moderators on that day × Per-Moderator Target)
+  const perModeratorTarget = getTargetForDate(startOfToday, settings.targetHistory, dailyTarget);
+  const todayTarget = perModeratorTarget * moderatorCount;
+  const yesterdayTarget =
+    getTargetForDate(startOfYesterday, settings.targetHistory, dailyTarget) *
+    yesterdayModeratorCount;
+  const teamBaseDailyTarget = dailyTarget * moderatorCount;
   const todayCount = raw.todayTouches?.[0]?.count || 0;
   const yesterdayCount = raw.yesterdayTouches?.[0]?.count || 0;
   const progressPercent = Math.min(100, Math.round((todayCount / (todayTarget || 1)) * 100));
@@ -449,45 +497,46 @@ const getAdminDashboardData = async (
     }
   });
 
-  // Timeframe Benchmark Configuration
-  let periodBenchmark = dailyTarget;
+  // Timeframe Benchmark Configuration (Team Target = perModerator × moderatorCount)
+  let periodBenchmark = teamBaseDailyTarget;
   let benchmarkUnitLabel = "day";
   let title = "7-Day Team Outreach Volume vs. Configured Target Benchmark";
-  let description = `Continuous benchmark reference line set to ${dailyTarget} touches/day. Monitor daily team compliance, weekly cadence, and goal attainment.`;
+  let description = `Continuous benchmark reference line set to ${teamBaseDailyTarget} meaningful contacts/day (${moderatorCount} moderator${moderatorCount === 1 ? "" : "s"} × ${dailyTarget}/day).`;
 
   if (timeframe === "1m") {
-    periodBenchmark = dailyTarget;
+    periodBenchmark = teamBaseDailyTarget;
     benchmarkUnitLabel = "day";
     title = "30-Day Team Outreach Volume & Daily Consistency Trend";
-    description = `Tracking day-by-day touches across the past 30 days against the ${dailyTarget}/day benchmark.`;
+    description = `Tracking day-by-day meaningful contacts across the past 30 days against the ${teamBaseDailyTarget}/day team benchmark.`;
   } else if (timeframe === "3m") {
-    periodBenchmark = dailyTarget * 5;
+    periodBenchmark = teamBaseDailyTarget * 5;
     benchmarkUnitLabel = "week";
     title = "3-Month Team Outreach Cadence & Weekly Attainment";
-    description = `Aggregated across 12 weekly periods against a 5-day weekly target of ${periodBenchmark} touches/week.`;
+    description = `Aggregated across 12 weekly periods against a 5-day weekly target of ${periodBenchmark} contacts/week.`;
   } else if (timeframe === "6m") {
-    periodBenchmark = dailyTarget * 22;
+    periodBenchmark = teamBaseDailyTarget * 22;
     benchmarkUnitLabel = "month";
     title = "6-Month Outreach Velocity & Monthly Performance";
-    description = `Tracking total monthly touches across the past 6 months against an estimated monthly benchmark of ${periodBenchmark}.`;
+    description = `Tracking total monthly meaningful contacts across the past 6 months against an estimated monthly benchmark of ${periodBenchmark}.`;
   } else if (timeframe === "1y") {
-    periodBenchmark = dailyTarget * 22;
+    periodBenchmark = teamBaseDailyTarget * 22;
     benchmarkUnitLabel = "month";
     title = "1-Year Comprehensive Outreach & Pipeline Growth Trend";
-    description = `Full 12-month historical outreach view across the workspace with ${periodBenchmark} touches/month reference benchmark.`;
+    description = `Full 12-month historical outreach view across the workspace with ${periodBenchmark} contacts/month reference benchmark.`;
   }
 
   // Construct Buckets with Database Counts
   const buckets: TTrendBucket[] = bucketConfigs.map((b) => {
     const count = raw[b.key]?.[0]?.count || 0;
+    const bucketModCount = getModeratorCountForDate(b.end, activeModerators);
 
     let bucketTarget = periodBenchmark;
     if (timeframe === "7d" || timeframe === "1m") {
-      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget);
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * bucketModCount;
     } else if (timeframe === "3m") {
-      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * 5;
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * bucketModCount * 5;
     } else if (timeframe === "6m" || timeframe === "1y") {
-      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * 22;
+      bucketTarget = getTargetForDate(b.start, settings.targetHistory, dailyTarget) * bucketModCount * 22;
     }
 
     const progressPercent = Math.round((count / (bucketTarget || 1)) * 100);
@@ -584,20 +633,48 @@ const getAdminDashboardData = async (
     metric4Sub = `Benchmark: ${periodBenchmark} / month`;
   }
 
-  // Moderator Leaderboard formatting
+  // Moderator Leaderboard formatting with per-moderator multi-metric targets
   const moderatorLeaderboard = (raw.moderatorTouchesToday || []).map(
-    (item: { _id: string; name: string; email: string; todayTouches: number }) => {
-      const touches = item.todayTouches || 0;
-      const pct = Math.min(100, Math.round((touches / dailyTarget) * 100));
+    (item: {
+      _id: string;
+      name: string;
+      email: string;
+      attemptsToday: number;
+      meaningfulContactsToday: number;
+      qualifiedToday: number;
+      convertedToday: number;
+    }) => {
+      const attempts = item.attemptsToday || 0;
+      const contacts = item.meaningfulContactsToday || 0;
+      const qualified = item.qualifiedToday || 0;
+      const converted = item.convertedToday || 0;
+      const reachRate = attempts > 0 ? Math.round((contacts / attempts) * 100) : 0;
+
+      const targets = getModeratorTargetsForDate(item._id, startOfToday, settings);
+      const individualTarget = perModeratorTarget;
+      const pct = Math.min(
+        100,
+        Math.round((contacts / (individualTarget || 1)) * 100),
+      );
+
       return {
         userId: item._id,
         name: item.name || "Moderator",
         email: item.email || "",
         role: "moderator",
-        todayTouches: touches,
+        todayTouches: contacts,
+        attemptsToday: attempts,
+        meaningfulContactsToday: contacts,
+        qualifiedToday: qualified,
+        convertedToday: converted,
+        reachRate,
+        targets: {
+          ...targets,
+          dailyContactTarget: individualTarget,
+        },
         progressPercent: pct,
-        isMet: touches >= dailyTarget,
-        toGo: Math.max(0, dailyTarget - touches),
+        isMet: contacts >= individualTarget,
+        toGo: Math.max(0, individualTarget - contacts),
       };
     },
   );
@@ -632,7 +709,9 @@ const getAdminDashboardData = async (
 
   return {
     timeframe,
-    dailyTarget,
+    dailyTarget: todayTarget,
+    perModeratorTarget,
+    moderatorCount,
     velocity: {
       todayCount,
       yesterdayCount,
@@ -710,29 +789,23 @@ const getModeratorDashboardData = async (
   const startOfYesterday = startOfToday - 86400000;
   const endOfYesterday = startOfToday - 1;
 
-  // Moderator attribution match
-  const moderatorMatch: any = {
-    $or: [
-      { lastContactedAt: { $gte: startOfToday, $lte: endOfToday } },
-      {
-        status: { $nin: ["uncontacted", null] },
-        updatedAt: { $gte: startOfToday, $lte: endOfToday },
-      },
-      { "notes.createdAt": { $gte: startOfToday, $lte: endOfToday } },
-    ],
-  };
-
-  if (userId) {
-    moderatorMatch.$and = [
-      {
+  const userFilter = userId
+    ? {
         $or: [
           { "lastContactedBy.userId": userId },
           { "assignedTo.userId": userId },
           { "notes.createdBy.userId": userId },
         ],
-      },
-    ];
-  }
+      }
+    : null;
+
+  const moderatorAttemptsMatch: any = userFilter
+    ? { $and: [buildAttemptMatch(startOfToday, endOfToday), userFilter] }
+    : buildAttemptMatch(startOfToday, endOfToday);
+
+  const moderatorMeaningfulMatch: any = userFilter
+    ? { $and: [buildMeaningfulContactMatch(startOfToday, endOfToday), userFilter] }
+    : buildMeaningfulContactMatch(startOfToday, endOfToday);
 
   const [aggregationResult] = await LeadModel.aggregate([
     {
@@ -747,49 +820,33 @@ const getModeratorDashboardData = async (
           },
         ],
 
-        // 2. Today's Touches Across Workspace
+        // 2. Today's Meaningful Contacts Across Workspace
         todayTouchesAll: [
-          {
-            $match: {
-              $or: [
-                { lastContactedAt: { $gte: startOfToday, $lte: endOfToday } },
-                {
-                  status: { $nin: ["uncontacted", null] },
-                  updatedAt: { $gte: startOfToday, $lte: endOfToday },
-                },
-                { "notes.createdAt": { $gte: startOfToday, $lte: endOfToday } },
-              ],
-            },
-          },
+          { $match: buildMeaningfulContactMatch(startOfToday, endOfToday) },
           { $count: "count" },
         ],
 
-        // 3. Yesterday's Touches Across Workspace
+        // 3. Yesterday's Meaningful Contacts Across Workspace
         yesterdayTouchesAll: [
-          {
-            $match: {
-              $or: [
-                { lastContactedAt: { $gte: startOfYesterday, $lte: endOfYesterday } },
-                {
-                  status: { $nin: ["uncontacted", null] },
-                  updatedAt: { $gte: startOfYesterday, $lte: endOfYesterday },
-                },
-                { "notes.createdAt": { $gte: startOfYesterday, $lte: endOfYesterday } },
-              ],
-            },
-          },
+          { $match: buildMeaningfulContactMatch(startOfYesterday, endOfYesterday) },
           { $count: "count" },
         ],
 
-        // 4. Moderator-Specific Today Touches
+        // 4. Moderator-Specific Today Meaningful Contacts
         moderatorTodayTouches: [
-          { $match: moderatorMatch },
+          { $match: moderatorMeaningfulMatch },
           { $count: "count" },
         ],
 
-        // 5. Today's Touchpoint Breakdown
+        // 4b. Moderator-Specific Today Dial Attempts
+        moderatorAttemptsToday: [
+          { $match: moderatorAttemptsMatch },
+          { $count: "count" },
+        ],
+
+        // 5. Today's Touchpoint Breakdown (all attempts by status)
         todayTouchBreakdown: [
-          { $match: moderatorMatch },
+          { $match: moderatorAttemptsMatch },
           {
             $group: {
               _id: "$status",
@@ -798,12 +855,20 @@ const getModeratorDashboardData = async (
           },
         ],
 
-        // 6. Today's Due Follow-Up Calls
+        // 6. Today's Due Follow-Up Calls (Moderator-specific: only leads dealt by / assigned to this moderator)
         todayFollowUps: [
           {
             $match: {
               followUpDate: { $lte: endOfToday, $ne: null },
               status: { $nin: ["converted", "not_interested", "invalid"] },
+              ...(userId
+                ? {
+                    $or: [
+                      { "lastContactedBy.userId": userId },
+                      { "assignedTo.userId": userId },
+                    ],
+                  }
+                : {}),
             },
           },
           { $sort: { followUpDate: 1 } },
@@ -851,22 +916,37 @@ const getModeratorDashboardData = async (
     }
   });
 
-  const todayTarget = getTargetForDate(startOfToday, settings.targetHistory, dailyTarget);
-  const todayCount = raw.todayTouchesAll?.[0]?.count || 0;
-  const yesterdayCount = raw.yesterdayTouchesAll?.[0]?.count || 0;
-  const moderatorTodayCount = raw.moderatorTodayTouches?.[0]?.count || todayCount;
+  const modTargets = getModeratorTargetsForDate(userId, startOfToday, settings);
+  const todayTarget = modTargets.dailyContactTarget;
+  const todayCount = raw.todayTouchesAll?.[0]?.count ?? 0;
+  const yesterdayCount = raw.yesterdayTouchesAll?.[0]?.count ?? 0;
+  const moderatorTodayCount = userId
+    ? (raw.moderatorTodayTouches?.[0]?.count ?? 0)
+    : (raw.moderatorTodayTouches?.[0]?.count ?? todayCount);
+  const attemptsToday = userId
+    ? (raw.moderatorAttemptsToday?.[0]?.count ?? 0)
+    : (raw.moderatorAttemptsToday?.[0]?.count ?? todayCount);
   const remainingToGo = Math.max(0, todayTarget - moderatorTodayCount);
   const progressPercent = Math.min(100, Math.round((moderatorTodayCount / (todayTarget || 1)) * 100));
+  const reachRate = attemptsToday > 0 ? Math.round((moderatorTodayCount / attemptsToday) * 100) : 0;
 
   // Touchpoint Breakdown
   let calledToday = 0;
   let interestedToday = 0;
+  let interestedOnlyToday = 0;
   let callLaterToday = 0;
+  let convertedToday = 0;
+  let notInterestedToday = 0;
+  let invalidToday = 0;
 
   (raw.todayTouchBreakdown || []).forEach((item: { _id: string; count: number }) => {
     if (item._id === "called") calledToday += item.count;
+    if (item._id === "interested") interestedOnlyToday += item.count;
     if (item._id === "interested" || item._id === "converted") interestedToday += item.count;
+    if (item._id === "converted") convertedToday += item.count;
     if (item._id === "call_later") callLaterToday += item.count;
+    if (item._id === "not_interested") notInterestedToday += item.count;
+    if (item._id === "invalid") invalidToday += item.count;
   });
 
   // Enrich Follow-Ups with real-time indicators
@@ -893,15 +973,26 @@ const getModeratorDashboardData = async (
     dailyTarget: todayTarget,
     kpiStats: {
       dailyTarget: todayTarget,
+      dailyCallTarget: modTargets.dailyCallTarget,
+      dailyQualifiedTarget: modTargets.dailyQualifiedTarget,
+      dailyConversionTarget: modTargets.dailyConversionTarget,
+      isCustomTarget: modTargets.isCustom,
       todayCount,
       moderatorTodayCount,
+      attemptsToday,
+      qualifiedToday: interestedToday,
+      convertedToday,
+      reachRate,
       yesterdayCount,
       remainingToGo,
       progressPercent,
       isTargetMet: moderatorTodayCount >= todayTarget,
       calledToday,
       interestedToday,
+      interestedOnlyToday,
       callLaterToday,
+      notInterestedToday,
+      invalidToday,
     },
     stageStats: {
       uncontacted: stageStats.uncontacted,

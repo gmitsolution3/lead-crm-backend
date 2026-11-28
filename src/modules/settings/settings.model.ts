@@ -1,5 +1,9 @@
 import { Schema, model } from "mongoose";
-import { TSettingsDocument, TTargetHistoryEntry } from "./settings.types";
+import {
+  TModeratorTargetConfig,
+  TSettingsDocument,
+  TTargetHistoryEntry,
+} from "./settings.types";
 
 const targetHistorySchema = new Schema<TTargetHistoryEntry>(
   {
@@ -25,6 +29,20 @@ const targetHistorySchema = new Schema<TTargetHistoryEntry>(
   { _id: false },
 );
 
+const moderatorTargetSchema = new Schema<TModeratorTargetConfig>(
+  {
+    userId: { type: String, required: true },
+    name: { type: String, default: "" },
+    email: { type: String, default: "" },
+    dailyCallTarget: { type: Number, required: true, default: 40, min: 1, max: 2000 },
+    dailyContactTarget: { type: Number, required: true, default: 25, min: 1, max: 1000 },
+    dailyQualifiedTarget: { type: Number, required: true, default: 5, min: 0, max: 500 },
+    dailyConversionTarget: { type: Number, required: true, default: 1, min: 0, max: 200 },
+    targetHistory: { type: [targetHistorySchema], default: [] },
+  },
+  { _id: false },
+);
+
 const settingsSchema = new Schema<TSettingsDocument>(
   {
     key: {
@@ -41,8 +59,30 @@ const settingsSchema = new Schema<TSettingsDocument>(
       min: 1,
       max: 1000,
     },
+    dailyCallTarget: {
+      type: Number,
+      default: 40,
+      min: 1,
+      max: 2000,
+    },
+    dailyQualifiedTarget: {
+      type: Number,
+      default: 5,
+      min: 0,
+      max: 500,
+    },
+    dailyConversionTarget: {
+      type: Number,
+      default: 1,
+      min: 0,
+      max: 200,
+    },
     targetHistory: {
       type: [targetHistorySchema],
+      default: [],
+    },
+    moderatorTargets: {
+      type: [moderatorTargetSchema],
       default: [],
     },
     dailyScrapeLimit: {

@@ -2,7 +2,10 @@ import crypto from "crypto";
 import { LeadModel, SearchGroupModel } from "./lead.model";
 import { searchGroupService } from "../searchGroup/searchGroup.service";
 import { AppError } from "../../utils/AppError";
-import { isStatusTransitionAllowed } from "./lead.constant";
+import {
+  isMeaningfulContactStatus,
+  isStatusTransitionAllowed,
+} from "./lead.constant";
 import {
   TKnownLeads,
   TSaveLeadPayload,
@@ -780,6 +783,7 @@ const updateLead = async (
     lastContactedBy?: { userId?: string; name?: string; email?: string };
     updatedBy?: { userId?: string; name?: string; email?: string };
     lastContactedAt?: number | null;
+    whatsapp?: string | null;
     callCount?: number;
     incrementCallCount?: boolean;
     groupId?: string;
@@ -798,6 +802,14 @@ const updateLead = async (
       );
     }
     updateFields.status = payload.status;
+    if (isMeaningfulContactStatus(payload.status)) {
+      updateFields.lastMeaningfulContactAt = now;
+      if (payload.lastContactedAt === undefined) {
+        updateFields.lastContactedAt = now;
+      }
+    } else if (payload.status === "uncontacted") {
+      updateFields.lastMeaningfulContactAt = null;
+    }
   }
   if (payload.priority !== undefined) updateFields.priority = payload.priority;
   if (payload.followUpDate !== undefined)
@@ -806,6 +818,8 @@ const updateLead = async (
     updateFields.dealValue = Number(payload.dealValue) || 0;
   if (payload.lastContactedAt !== undefined)
     updateFields.lastContactedAt = payload.lastContactedAt;
+  if (payload.whatsapp !== undefined)
+    updateFields.whatsapp = payload.whatsapp ?? "";
 
   // Automatically assign moderator/admin as dealt by when updating info
   const actor = payload.updatedBy || payload.assignedTo || payload.lastContactedBy;
@@ -874,12 +888,14 @@ const addLeadNote = async (
     updateSet.assignedTo = payload.createdBy;
   }
 
-  // If lead is uncontacted, calling & adding a note automatically marks it as called
+  // If lead is uncontacted, calling & adding a note automatically marks it as called (attempt)
   const existing = await LeadModel.findOne({ leadId });
   if (!existing) return null;
 
   if (existing.status === "uncontacted") {
     updateSet.status = "called";
+  } else if (isMeaningfulContactStatus(existing.status)) {
+    updateSet.lastMeaningfulContactAt = now;
   }
 
   // Automatically increment callCount by 1 when a note is added
